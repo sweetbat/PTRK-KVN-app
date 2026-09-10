@@ -78,7 +78,7 @@ private fun formatTrafficBytes(bytes: Double): String {
     } else {
         ((amount * 100).toLong() / 100.0).toString().trimEnd('0').trimEnd('.')
     }
-    return "$rounded $unit"
+    return org.olcbox.app.i18n.S.localizeDataUnit("$rounded$unit")
 }
 
 private val TRAFFIC_SIZE_PATTERN = Regex("^([0-9]+(?:[.,][0-9]+)?)\\s*([a-zA-Z]*)$")

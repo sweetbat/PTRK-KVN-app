@@ -4,6 +4,9 @@ import io.ktor.client.HttpClient
 import io.ktor.client.engine.ProxyBuilder
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.HttpTimeout
+import io.ktor.client.request.get
+import io.ktor.client.request.headers
+import io.ktor.client.statement.bodyAsText
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.olcbox.app.data.repository.SubscriptionFetchProxy
@@ -46,6 +49,60 @@ internal actual fun createProxyHttpClient(
             requestTimeoutMillis = requestTimeoutMs
             socketTimeoutMillis = socketTimeoutMs
         }
+    }
+}
+
+internal actual suspend fun downloadSubscriptionBodyDirect(
+    url: String,
+    hwid: String?,
+    allowInsecureRequests: Boolean,
+    connectTimeoutMs: Long,
+    requestTimeoutMs: Long,
+    socketTimeoutMs: Long,
+): DirectSubscriptionDownload {
+    val client = createProxyHttpClient(
+        connectTimeoutMs = connectTimeoutMs,
+        requestTimeoutMs = requestTimeoutMs,
+        socketTimeoutMs = socketTimeoutMs,
+        allowInsecureRequests = allowInsecureRequests,
+    )
+    return try {
+        val agents = listOf("ClashMeta/1.19.0", "clash.meta/v1.19.0", "mihomo/1.19.0", "Clash")
+        val joiner = if ('?' in url) "&" else "?"
+        val urls = listOf(url, "$url${joiner}flag=clash", "$url${joiner}flag=meta").distinct()
+        fun usable(text: String): Boolean {
+            val lower = text.lowercase()
+            return lower.contains("proxies:") ||
+                lower.contains("proxy-groups:") ||
+                lower.contains("mixed-port:") ||
+                text.contains("olcrtc://", ignoreCase = true)
+        }
+        for (candidate in urls) {
+            for (agent in agents) {
+                val body = runCatching {
+                    client.get(candidate) {
+                        headers {
+                            append(io.ktor.http.HttpHeaders.Accept, "text/yaml, */*")
+                            remove(io.ktor.http.HttpHeaders.UserAgent)
+                            append(io.ktor.http.HttpHeaders.UserAgent, agent)
+                            if (!hwid.isNullOrBlank()) append("x-hwid", hwid)
+                        }
+                    }.bodyAsText()
+                }.getOrNull()
+                if (body != null && usable(body)) return DirectSubscriptionDownload(content = body)
+            }
+        }
+        DirectSubscriptionDownload(
+            content = client.get(url) {
+                headers {
+                    append(io.ktor.http.HttpHeaders.Accept, "text/yaml, */*")
+                    remove(io.ktor.http.HttpHeaders.UserAgent)
+                    append(io.ktor.http.HttpHeaders.UserAgent, "ClashMeta/1.19.0")
+                }
+            }.bodyAsText()
+        )
+    } finally {
+        client.close()
     }
 }
 

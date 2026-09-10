@@ -82,12 +82,13 @@ class HomeScreenViewModel(
                             connectedSinceEpochMs = null,
                         )
                         VpnStatus.Reconnecting -> it.copy(
-                            isVpnConnected = true,
+                            // Show as connecting spinner, not "Connected" + spinner.
+                            isVpnConnected = false,
                             isVpnLoading = true,
                         )
                         VpnStatus.Stopping -> it.copy(
                             isVpnConnected = false,
-                            isVpnLoading = false,
+                            isVpnLoading = true,
                             connectedSinceEpochMs = null,
                         )
                         VpnStatus.Disconnected -> it.copy(
@@ -173,13 +174,29 @@ class HomeScreenViewModel(
 
     fun ToggleVpn() {
         val status = vpnManager.status.value
-        if (_state.value.isVpnLoading ||
-            status is VpnStatus.Connecting ||
-            status is VpnStatus.Reconnecting
+        // Cancel an in-flight connect (button shows STOP while loading).
+        if (status is VpnStatus.Connecting ||
+            status is VpnStatus.Reconnecting ||
+            (_state.value.isVpnLoading && !_state.value.isVpnConnected)
         ) {
             viewModelScope.launch {
-                vpnManager.stopVpn()
-                _state.update { it.copy(isVpnConnected = false, isVpnLoading = false) }
+                runCatching { vpnManager.stopVpn() }
+            }
+            return
+        }
+        // Stuck Stopping left Start dead and no Connecting notification — force through.
+        if (status is VpnStatus.Stopping) {
+            viewModelScope.launch {
+                runCatching { vpnManager.stopVpn() }
+                kotlinx.coroutines.delay(400)
+                _state.update {
+                    it.copy(isVpnConnected = false, isVpnLoading = false, connectedSinceEpochMs = null)
+                }
+                // Fall through to start below by re-entering after brief settle.
+                val active = locationsRepository.getActiveLocation()
+                if (active == null || !active.location.isComplete()) return@launch
+                _state.update { it.copy(isVpnLoading = true) }
+                vpnManager.startVpn()
             }
             return
         }
@@ -228,13 +245,14 @@ class HomeScreenViewModel(
                         )
                     }
                 } else {
+                    vpnManager.prepareActiveEngine()
                     vpnManager.startVpn()
                 }
             }
 
             VpnStatus.Disconnected,
             VpnStatus.Stopping,
-            is VpnStatus.Error -> Unit
+            is VpnStatus.Error -> vpnManager.prepareActiveEngine()
         }
     }
     private fun updateLocationConfig(block: (LocationConfig) -> LocationConfig) {

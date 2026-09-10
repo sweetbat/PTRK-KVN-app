@@ -37,7 +37,7 @@ fun TrafficQuotaIndicator(
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Text(
-                text = "${quota.availableLabel} ${org.olcbox.app.i18n.S.remaining}",
+                text = "${org.olcbox.app.i18n.S.localizeDataUnit(quota.availableLabel)} ${org.olcbox.app.i18n.S.remaining}",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = if (compact) 11.sp else 12.sp,
                 maxLines = 1,
@@ -45,7 +45,7 @@ fun TrafficQuotaIndicator(
                 modifier = Modifier.weight(1f)
             )
             Text(
-                text = "${quota.usedLabel} ${org.olcbox.app.i18n.S.used}",
+                text = "${org.olcbox.app.i18n.S.localizeDataUnit(quota.usedLabel)} ${org.olcbox.app.i18n.S.used}",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = if (compact) 11.sp else 12.sp,
                 maxLines = 1,

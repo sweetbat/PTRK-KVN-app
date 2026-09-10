@@ -25,7 +25,13 @@ object ClashYaml {
 
     fun looksLikeClash(text: String): Boolean {
         val body = decode(text)
-        return clashKey.containsMatchIn(body) && !body.contains("olcrtc://")
+        if (body.contains("olcrtc://")) return false
+        if (clashKey.containsMatchIn(body)) return true
+        // Remnawave / Meta sometimes ships provider-only profiles.
+        val lower = body.lowercase()
+        return lower.contains("proxy-providers:") ||
+            lower.contains("proxy-groups:") ||
+            (lower.contains("proxies:") && (lower.contains("type:") || lower.contains("- {")))
     }
 
     fun decode(raw: String): String {
@@ -95,7 +101,11 @@ object ClashYaml {
 
     private fun extractProxyGroups(text: String): List<ProxyGroup> {
         val lines = text.lineSequence().toList()
-        val start = lines.indexOfFirst { it.trim() == "proxy-groups:" || it.trim().startsWith("proxy-groups:") }
+        val start = lines.indexOfFirst { line ->
+            val trimmed = line.trim()
+            val indent = line.takeWhile { it == ' ' || it == '\t' }.length
+            indent == 0 && (trimmed == "proxy-groups:" || trimmed.startsWith("proxy-groups:"))
+        }
         if (start < 0) return emptyList()
         val out = mutableListOf<ProxyGroup>()
         var i = start + 1
@@ -175,9 +185,12 @@ object ClashYaml {
 
     private fun extractDashNamesInSection(text: String, section: String): List<String> {
         val lines = text.lineSequence().toList()
-        val start = lines.indexOfFirst {
-            val t = it.trim()
-            t == "$section:" || t.startsWith("$section:")
+        // Only match TOP-LEVEL sections. Nested `proxies:` under proxy-groups would
+        // otherwise steal the cursor and yield group names → empty leaf set → import fail.
+        val start = lines.indexOfFirst { line ->
+            val trimmed = line.trim()
+            val indent = line.takeWhile { it == ' ' || it == '\t' }.length
+            indent == 0 && (trimmed == "$section:" || trimmed.startsWith("$section:"))
         }
         if (start < 0) return emptyList()
         val names = mutableListOf<String>()

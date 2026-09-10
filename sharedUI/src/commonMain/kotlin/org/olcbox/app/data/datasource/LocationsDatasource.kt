@@ -32,6 +32,7 @@ import org.olcbox.app.data.model.LocationBundleV4
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.LocationEntry
 import org.olcbox.app.data.model.LocationMetadata
+import org.olcbox.app.data.model.PtrkSubscriptionCompanion
 import org.olcbox.app.data.model.SubscriptionMetadata
 import org.olcbox.app.data.model.parseSubscriptionRefreshIntervalMs
 import org.olcbox.app.data.repository.LocationImportFailureKind
@@ -55,6 +56,28 @@ internal expect fun createProxyHttpClient(
     socketTimeoutMs: Long = 8_000,
     allowInsecureRequests: Boolean = false
 ): HttpClient
+
+/**
+ * Platform download that must send a Clash-compatible User-Agent.
+ * Remnawave returns Clash YAML for ClashMeta, base64 URI dump for okhttp, JSON for ktor-client.
+ */
+internal data class DirectSubscriptionDownload(
+    val content: String,
+    val profileTitle: String? = null,
+    val trafficUsed: String? = null,
+    val trafficAvailable: String? = null,
+    val expireLabel: String? = null,
+    val updateIntervalMs: Long? = null,
+)
+
+internal expect suspend fun downloadSubscriptionBodyDirect(
+    url: String,
+    hwid: String?,
+    allowInsecureRequests: Boolean,
+    connectTimeoutMs: Long = 8_000,
+    requestTimeoutMs: Long = 20_000,
+    socketTimeoutMs: Long = 20_000,
+): DirectSubscriptionDownload
 
 internal expect suspend fun <T> withProxyAuthentication(
     subscriptionProxy: SubscriptionFetchProxy?,
@@ -251,10 +274,49 @@ class LocationsRepositoryImpl(
             }
             saveBundleUnlocked(merged)
         }
-        return LocationImportResult.Success(
+
+        val primary = LocationImportResult.Success(
             importedLocations = importedBundle.locations.size,
             subscriptionUrl = resolved.source.subscriptionUrl
         )
+        return importPtrkOlcRtcCompanionIfNeeded(
+            primary = primary,
+            subscriptionProxy = subscriptionProxy,
+            allowInsecureRequests = allowInsecureRequests,
+        )
+    }
+
+    /**
+     * drink.ptrkkvn.beer/mug/{token} → also import olcsub.ptrkkvn.beer/{token}.
+     * Companion import failures are ignored so the Mihomo sub still lands.
+     */
+    private suspend fun importPtrkOlcRtcCompanionIfNeeded(
+        primary: LocationImportResult.Success,
+        subscriptionProxy: SubscriptionFetchProxy?,
+        allowInsecureRequests: Boolean,
+    ): LocationImportResult.Success {
+        val companionUrl = PtrkSubscriptionCompanion.olcRtcCompanionUrl(primary.subscriptionUrl)
+            ?: return primary
+        val alreadyHave = getBundle().locations.any {
+            it.subscriptionUrl?.trim().equals(companionUrl, ignoreCase = true) == true
+        }
+        if (alreadyHave) return primary
+
+        val companionResult = runCatching {
+            importTextDetailed(
+                text = companionUrl,
+                subscriptionProxy = subscriptionProxy,
+                allowInsecureRequests = allowInsecureRequests ||
+                    companionUrl.startsWith("http://", ignoreCase = true),
+            )
+        }.getOrNull()
+
+        return when (companionResult) {
+            is LocationImportResult.Success -> primary.copy(
+                importedLocations = primary.importedLocations + companionResult.importedLocations,
+            )
+            else -> primary
+        }
     }
 
     override suspend fun refreshSubscriptions(subscriptionProxy: SubscriptionFetchProxy?): Int =
@@ -278,6 +340,7 @@ class LocationsRepositoryImpl(
             .groupBy { it.subscriptionUrl!!.trim() }
             .filterKeys { onlyUrls == null || it in onlyUrls }
         var successful = 0
+        val companionUrls = linkedSetOf<String>()
         for ((url, snapshot) in groups) {
             // Network I/O must not hold the storage lock: users can select or delete
             // locations while a subscription server is unreachable.
@@ -290,6 +353,7 @@ class LocationsRepositoryImpl(
                     it.metadata?.subscription?.allowInsecureRequests == true
                 } || url.startsWith("http://", ignoreCase = true)
             )
+            PtrkSubscriptionCompanion.olcRtcCompanionUrl(url)?.let { companionUrls += it }
             mutationMutex.withLock {
                 val current = getBundleUnlocked()
                 val previous = current.locations.filter { it.subscriptionUrl?.trim() == url }
@@ -319,6 +383,16 @@ class LocationsRepositoryImpl(
                 saveBundleUnlocked(mergeImportedSubscription(current, imported, url))
                 successful++
             }
+        }
+        // Refresh paired olcRTC (olcsub) when a drink.ptrkkvn.beer mug URL was refreshed.
+        val pendingCompanions = companionUrls.filter { companion ->
+            groups.keys.none { it.equals(companion, ignoreCase = true) } &&
+                getBundle().locations.any {
+                    it.subscriptionUrl?.trim().equals(companion, ignoreCase = true) == true
+                }
+        }.toSet()
+        if (pendingCompanions.isNotEmpty()) {
+            successful += refreshSubscriptionsMatching(pendingCompanions, subscriptionProxy)
         }
         return successful
     }
@@ -569,9 +643,17 @@ class LocationsRepositoryImpl(
                 ?: ResolvedImportResult.Failure(
                     LocationImportFailureKind.UnsupportedFormat,
                     if (input.isHttpUrl()) {
-                        "The server responded, but the body is not olcRTC or Clash/Mihomo YAML"
+                        val body = source.content
+                        when {
+                            body.trim().let { t ->
+                                t.length > 80 &&
+                                    t.filterNot { it.isWhitespace() }.all { it.isLetterOrDigit() || it == '+' || it == '/' || it == '=' } &&
+                                    !ClashYaml.looksLikeClash(t)
+                            } -> org.olcbox.app.i18n.S.importBodyUriDump
+                            else -> org.olcbox.app.i18n.S.importBodyNotSupported
+                        }
                     } else {
-                        "The text is not a supported PTRK-KVN configuration"
+                        org.olcbox.app.i18n.S.importTextNotSupported
                     }
                 )
         }
@@ -602,7 +684,11 @@ class LocationsRepositoryImpl(
                 locations = parsed.bundle.locations.map { entry ->
                     val existing = entry.metadata?.subscription ?: SubscriptionMetadata()
                     val enriched = existing.copy(
-                        name = source.profileTitle ?: existing.name,
+                        name = source.profileTitle
+                            ?: existing.name?.takeUnless { name ->
+                                val token = source.subscriptionUrl?.substringAfterLast('/')
+                                !token.isNullOrBlank() && name == token
+                            },
                         used = source.trafficUsed ?: existing.used,
                         available = source.trafficAvailable ?: existing.available,
                         description = source.expireLabel ?: existing.description,
@@ -677,55 +763,40 @@ class LocationsRepositoryImpl(
         } else {
             null
         }
-        val usesDedicatedClient = subscriptionProxy != null || allowInsecureRequests
-        val client = if (usesDedicatedClient) {
-            subscriptionHttpClientFactory(subscriptionProxy, allowInsecureRequests)
-        } else {
-            httpClient
-        }
 
         return try {
             withProxyAuthentication(subscriptionProxy) {
-                val response = try {
-                    client.get(url) {
-                        headers {
-                            append(
-                                HttpHeaders.Accept,
-                                "text/plain, text/markdown, application/octet-stream, */*"
-                            )
-                            if (requestMode == SubscriptionRequestMode.Identity) {
-                                append(
-                                    HttpHeaders.UserAgent,
-                                    "clash.meta/v1.18.0 PTRK-KVN/${CurrentAppInfo.value.version}",
-                                )
-                                append("x-hwid", hwid.orEmpty())
-                            } else {
-                                append(
-                                    HttpHeaders.UserAgent,
-                                    "clash.meta/v1.18.0",
-                                )
-                            }
-                        }
+                // Prefer the platform direct downloader (Android: raw OkHttp with pinned UA).
+                // Ktor alone was sending ktor-client / okhttp UA → JSON or base64, not Clash YAML.
+                val content = if (subscriptionProxy == null) {
+                    try {
+                        downloadSubscriptionBodyDirect(
+                            url = url,
+                            hwid = hwid,
+                            allowInsecureRequests = allowInsecureRequests,
+                        )
+                    } catch (error: Throwable) {
+                        if (error is CancellationException) throw error
+                        return@withProxyAuthentication error.toDownloadFailure()
                     }
-                } catch (error: Throwable) {
-                    if (error is CancellationException) throw error
-                    return@withProxyAuthentication error.toDownloadFailure()
+                } else {
+                    downloadTextFromUrlViaKtor(
+                        url = url,
+                        hwid = hwid,
+                        subscriptionProxy = subscriptionProxy,
+                        allowInsecureRequests = allowInsecureRequests,
+                    ).getOrElse { error ->
+                        return@withProxyAuthentication when (error) {
+                            is IllegalStateException -> DownloadSubscriptionResult.Failure(
+                                LocationImportFailureKind.Http,
+                                error.message ?: "Subscription HTTP error"
+                            )
+                            else -> error.toDownloadFailure()
+                        }
+                    }.let { DirectSubscriptionDownload(content = it) }
                 }
 
-                if (response.status.value !in 200..299) {
-                    return@withProxyAuthentication DownloadSubscriptionResult.Failure(
-                        LocationImportFailureKind.Http,
-                        "Subscription server returned HTTP ${response.status.value}"
-                    )
-                }
-
-                val content = try {
-                    response.bodyAsText()
-                } catch (error: Throwable) {
-                    if (error is CancellationException) throw error
-                    return@withProxyAuthentication error.toDownloadFailure()
-                }
-                if (content.isBlank()) {
+                if (content.content.isBlank()) {
                     return@withProxyAuthentication DownloadSubscriptionResult.Failure(
                         LocationImportFailureKind.EmptyResponse,
                         "Subscription server returned an empty response"
@@ -734,20 +805,109 @@ class LocationsRepositoryImpl(
 
                 DownloadSubscriptionResult.Success(
                     DownloadedSubscription(
-                        content = content,
-                        updateIntervalMs = response.profileUpdateIntervalMs(),
-                        profileTitle = response.profileTitle(),
-                        trafficUsed = response.subscriptionTraffic()?.first,
-                        trafficAvailable = response.subscriptionTraffic()?.second,
-                        expireLabel = response.subscriptionExpireLabel(),
+                        content = content.content,
+                        updateIntervalMs = content.updateIntervalMs,
+                        profileTitle = content.profileTitle,
+                        trafficUsed = content.trafficUsed,
+                        trafficAvailable = content.trafficAvailable,
+                        expireLabel = content.expireLabel,
                     )
                 )
             }
+        } catch (error: Throwable) {
+            if (error is CancellationException) throw error
+            error.toDownloadFailure()
+        }
+    }
+
+    private suspend fun downloadTextFromUrlViaKtor(
+        url: String,
+        hwid: String?,
+        subscriptionProxy: SubscriptionFetchProxy?,
+        allowInsecureRequests: Boolean,
+    ): Result<String> {
+        val client = subscriptionHttpClientFactory(subscriptionProxy, allowInsecureRequests)
+        return try {
+            val response = client.get(url) {
+                headers {
+                    append(HttpHeaders.Accept, "text/yaml, text/plain, application/octet-stream, */*")
+                    remove(HttpHeaders.UserAgent)
+                    append(HttpHeaders.UserAgent, "ClashMeta/1.19.0")
+                    if (!hwid.isNullOrBlank()) append("x-hwid", hwid)
+                }
+            }
+            if (response.status.value !in 200..299) {
+                return Result.failure(
+                    IllegalStateException("Subscription server returned HTTP ${response.status.value}")
+                )
+            }
+            val initial = response.bodyAsText()
+            val usable = resolveClashCompatibleBody(client, url, initial, hwid)
+            Result.success(usable)
+        } catch (error: Throwable) {
+            if (error is CancellationException) throw error
+            Result.failure(error)
         } finally {
-            if (usesDedicatedClient) {
-                client.close()
+            client.close()
+        }
+    }
+
+    private suspend fun resolveClashCompatibleBody(
+        client: HttpClient,
+        url: String,
+        initial: String,
+        hwid: String?,
+    ): String {
+        fun usable(text: String): Boolean =
+            ClashYaml.looksLikeClash(text) || text.contains("olcrtc://", ignoreCase = true)
+
+        if (usable(initial)) return initial
+
+        val agents = listOf(
+            "ClashMeta/1.19.0",
+            "clash.meta/v1.19.0",
+            "mihomo/1.19.0",
+            "Clash",
+        )
+        val urlVariants = buildList {
+            add(url)
+            val joiner = if ('?' in url) "&" else "?"
+            add("$url${joiner}flag=clash")
+            add("$url${joiner}flag=meta")
+        }.distinct()
+
+        for (candidateUrl in urlVariants) {
+            for (agent in agents) {
+                val body = runCatching {
+                    client.get(candidateUrl) {
+                        headers {
+                            append(HttpHeaders.Accept, "text/yaml, */*")
+                            remove(HttpHeaders.UserAgent)
+                            append(HttpHeaders.UserAgent, agent)
+                            if (!hwid.isNullOrBlank()) append("x-hwid", hwid)
+                        }
+                    }.bodyAsText()
+                }.getOrNull() ?: continue
+                if (usable(body)) return body
             }
         }
+
+        // Last resort: no hwid (some panels reject unknown devices with a URI dump).
+        if (!hwid.isNullOrBlank()) {
+            for (candidateUrl in urlVariants) {
+                val body = runCatching {
+                    client.get(candidateUrl) {
+                        headers {
+                            append(HttpHeaders.Accept, "text/yaml, */*")
+                            remove(HttpHeaders.UserAgent)
+                            append(HttpHeaders.UserAgent, "ClashMeta/1.19.0")
+                        }
+                    }.bodyAsText()
+                }.getOrNull()
+                if (body != null && usable(body)) return body
+            }
+        }
+        return initial
     }
 
     private fun String.isHttpUrl(): Boolean {
@@ -878,7 +1038,8 @@ class LocationsRepositoryImpl(
         if (nodes.all.isEmpty()) return null
         val meta = LocationMetadata(
             subscription = SubscriptionMetadata(
-                name = subscriptionUrl?.substringAfterLast('/')?.ifBlank { null },
+                // Title comes from profile-title header; never use the mug URL token.
+                name = null,
                 updateIntervalMs = updateIntervalMs,
             ).normalized()
         )
@@ -1489,20 +1650,36 @@ class LocationsRepositoryImpl(
         val download = part("download") ?: 0L
         val total = part("total") ?: return null
         val used = (upload + download).coerceAtLeast(0L)
-        return formatBytes(used) to formatBytes(total)
+        val availableLabel = if (total <= 0L) "∞" else formatBytes(total)
+        return formatBytes(used) to availableLabel
     }
 
     private fun HttpResponse.subscriptionExpireLabel(): String? {
         val raw = headers["subscription-userinfo"]?.trim()?.ifBlank { null } ?: return null
-        val expire = raw.split(';')
+        val expireRaw = raw.split(';')
             .map { it.trim() }
             .firstOrNull { it.startsWith("expire=", ignoreCase = true) }
             ?.substringAfter('=')
             ?.toLongOrNull()
             ?: return null
-        if (expire <= 0L) return null
-        val remainingDays = ((expire * 1000L) - System.currentTimeMillis()) / (24L * 60L * 60L * 1000L)
-        return if (remainingDays >= 0) "Expires in ${remainingDays}d" else "Expired"
+        if (expireRaw < 0L) return null
+        // Remnawave sends expire=0 for non-expiring plans — show that explicitly.
+        if (expireRaw == 0L) return "\u221e"
+        val millis = if (expireRaw > 10_000_000_000L) expireRaw else expireRaw * 1000L
+        val days = millis / 86_400_000L
+        var z = days + 719_468L
+        val era = (if (z >= 0) z else z - 146_096) / 146_097
+        val doe = z - era * 146_097
+        val yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365
+        val y = yoe + era * 400
+        val doy = doe - (365 * yoe + yoe / 4 - yoe / 100)
+        val mp = (5 * doy + 2) / 153
+        val d = doy - (153 * mp + 2) / 5 + 1
+        val m = mp + (if (mp < 10) 3 else -9)
+        val year = y + (if (m <= 2) 1 else 0)
+        val dd = d.toString().padStart(2, '0')
+        val mm = m.toString().padStart(2, '0')
+        return "$dd.$mm.$year"
     }
 
     private fun formatBytes(bytes: Long): String {

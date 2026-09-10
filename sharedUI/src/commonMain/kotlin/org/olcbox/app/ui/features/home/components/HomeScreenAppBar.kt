@@ -29,14 +29,9 @@ fun HomeScreenAppBar(
         title = {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
-                    text = org.olcbox.app.i18n.S.appName,
-                    style = MaterialTheme.typography.titleLarge,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Text(
                     text = org.olcbox.app.i18n.S.appSubtitle,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface
                 )
             }
         },
@@ -45,7 +40,7 @@ fun HomeScreenAppBar(
                 IconButton(onClick = onAppSettingsClick) {
                     Icon(
                         imageVector = Icons.Outlined.Settings,
-                        contentDescription = "Application settings",
+                        contentDescription = org.olcbox.app.i18n.S.applicationSettings,
                         tint = MaterialTheme.colorScheme.onSurface
                     )
                 }
@@ -53,7 +48,7 @@ fun HomeScreenAppBar(
                 IconButton(onClick = onHistoryClick) {
                     Icon(
                         imageVector = Icons.Outlined.History,
-                        contentDescription = "History",
+                        contentDescription = org.olcbox.app.i18n.S.history,
                         tint = MaterialTheme.colorScheme.onSurface
                     )
                 }
@@ -64,7 +59,7 @@ fun HomeScreenAppBar(
                 IconButton(onClick = onSplitTunnelingClick) {
                     Icon(
                         imageVector = Icons.Outlined.Shield,
-                        contentDescription = "Split tunneling",
+                        contentDescription = org.olcbox.app.i18n.S.splitTunneling,
                         tint = MaterialTheme.colorScheme.onSurface
                     )
                 }
@@ -72,7 +67,7 @@ fun HomeScreenAppBar(
             IconButton(onClick = onAddClick) {
                 Icon(
                     imageVector = Icons.Outlined.Add,
-                    contentDescription = "Add configuration",
+                    contentDescription = org.olcbox.app.i18n.S.addConfiguration,
                     tint = MaterialTheme.colorScheme.onSurface
                 )
             }

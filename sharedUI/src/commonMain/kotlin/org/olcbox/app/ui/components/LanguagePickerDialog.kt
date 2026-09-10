@@ -30,14 +30,21 @@ fun LanguagePickerDialog(
 
     AlertDialog(
         onDismissRequest = { /* first launch — must choose */ },
-        title = { Text(S.chooseLanguageTitle) },
+        title = {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                // Hardcoded bilingual title — must not depend on AppLocale (language not chosen yet).
+                Text("Choose language")
+                Text("\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u044f\u0437\u044b\u043a")
+            }
+        },
         text = {
             Column(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Text(
-                    text = S.chooseLanguageBody,
+                    text = "Which language should the app use?\n" +
+                        "\u041d\u0430 \u043a\u0430\u043a\u043e\u043c \u044f\u0437\u044b\u043a\u0435 \u043f\u043e\u043a\u0430\u0437\u044b\u0432\u0430\u0442\u044c \u0438\u043d\u0442\u0435\u0440\u0444\u0435\u0439\u0441?",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -78,7 +85,7 @@ fun LanguagePickerDialog(
                 },
                 modifier = Modifier.padding(end = 4.dp),
             ) {
-                Text(S.continueLabel)
+                Text("Continue / \u041f\u0440\u043e\u0434\u043e\u043b\u0436\u0438\u0442\u044c")
             }
         },
     )

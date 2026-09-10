@@ -35,7 +35,12 @@ class OlcRtcProbeService : Service() {
             stopSelf(startId)
             return START_NOT_STICKY
         }
-        val receiver = intent.getParcelableExtra<ResultReceiver>(EXTRA_RECEIVER)
+        val receiver = if (android.os.Build.VERSION.SDK_INT >= 33) {
+            intent.getParcelableExtra(EXTRA_RECEIVER, ResultReceiver::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            intent.getParcelableExtra(EXTRA_RECEIVER)
+        }
         val action = intent.getStringExtra(EXTRA_ACTION) ?: ACTION_PING
         val provider = intent.getStringExtra(EXTRA_PROVIDER).orEmpty()
         val transport = intent.getStringExtra(EXTRA_TRANSPORT).orEmpty()

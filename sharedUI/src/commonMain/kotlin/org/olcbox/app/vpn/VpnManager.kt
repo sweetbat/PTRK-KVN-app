@@ -20,6 +20,8 @@ interface VpnManager {
     fun needsPermission(): Boolean
     fun startVpn()
     fun stopVpn()
+    /** Kill the inactive engine process / recycle :vpn when location engine changes. */
+    fun prepareActiveEngine() = Unit
     suspend fun ping(locationConfig: LocationConfig): Long?
     suspend fun checkConnection(locationConfig: LocationConfig): Long?
     fun subscriptionFetchProxy(): SubscriptionFetchProxy? = null

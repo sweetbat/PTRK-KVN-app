@@ -18,7 +18,6 @@ import androidx.compose.material.icons.automirrored.outlined.Input
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.FileOpen
 import androidx.compose.material.icons.outlined.QrCodeScanner
-import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -29,6 +28,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -37,19 +38,21 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import org.olcbox.app.i18n.S
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AddConfigurationSheet(
     canScanQr: Boolean,
-    hasSubscriptions: Boolean,
     onDismiss: () -> Unit,
     onScanQrClick: () -> Unit,
     onPasteLinkClick: () -> Unit,
     onImportFileClick: () -> Unit,
-    onUpdateSubscriptionsClick: () -> Unit,
     onAddCustomLocationClick: () -> Unit
 ) {
+    val language by org.olcbox.app.i18n.AppLocale.language.collectAsState()
+    @Suppress("UNUSED_EXPRESSION")
+    language
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     ModalBottomSheet(
@@ -64,49 +67,39 @@ fun AddConfigurationSheet(
                 .padding(bottom = 32.dp)
         ) {
             AddSheetHeader(
-                title = "Add connection",
-                subtitle = "Subscription or custom location"
+                title = S.addConnection,
+                subtitle = S.addConnectionSubtitle
             )
 
-            Spacer(Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(20.dp))
 
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 if (canScanQr) {
                     AddSheetAction(
-                        title = "Scan QR code",
-                        value = "Subscription or olcrtc URI",
+                        title = S.scanQr,
+                        value = S.scanQrHint,
                         icon = Icons.Outlined.QrCodeScanner,
                         onClick = onScanQrClick
                     )
                 }
 
                 AddSheetAction(
-                    title = "Enter link or URI",
-                    value = "Type, edit, or import from clipboard",
+                    title = S.enterLinkOrUri,
+                    value = S.enterLinkOrUriHint,
                     icon = Icons.AutoMirrored.Outlined.Input,
                     onClick = onPasteLinkClick
                 )
 
                 AddSheetAction(
-                    title = "Import from file",
-                    value = "Read subscription or config file",
+                    title = S.importFromFile,
+                    value = S.importFromFileHint,
                     icon = Icons.Outlined.FileOpen,
                     onClick = onImportFileClick
                 )
 
-                if (hasSubscriptions) {
-                    AddSheetAction(
-                        title = "Update subscriptions",
-                        value = "Refresh imported subscription locations",
-                        icon = Icons.Outlined.Refresh,
-                        showChevron = false,
-                        onClick = onUpdateSubscriptionsClick
-                    )
-                }
-
                 AddSheetAction(
-                    title = "Create custom location",
-                        value = "Enter room, key, provider, and transport",
+                    title = S.createCustomLocation,
+                    value = S.createCustomLocationHint,
                     icon = Icons.Outlined.Add,
                     onClick = onAddCustomLocationClick
                 )

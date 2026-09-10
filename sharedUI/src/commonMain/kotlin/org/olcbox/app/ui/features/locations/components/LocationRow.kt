@@ -169,7 +169,7 @@ fun LocationRow(
 
             pingMs != null -> {
                 Text(
-                    text = "$pingMs ms",
+                    text = "$pingMs ${org.olcbox.app.i18n.S.localizeDataUnit("ms")}",
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Medium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -211,11 +211,7 @@ private fun locationSubtitle(location: LocationItem): String {
     val config = location.config
     val metadata = location.metadata
     if (config?.isMihomo() == true) {
-        val kind = when (metadata?.subscription?.comment) {
-            "bypass" -> S.bypass
-            else -> S.node
-        }
-        return listOfNotNull(S.mihomoEngine, kind).joinToString(" · ")
+        return S.mihomoEngine
     }
 
     val providerName = config?.providerName()
@@ -233,11 +229,21 @@ private fun locationSubtitle(location: LocationItem): String {
 }
 
 private fun quotaText(used: String?, available: String?): String? {
+    val usedRaw = used?.trim()?.takeIf { it.isNotBlank() } ?: return available?.let {
+        org.olcbox.app.i18n.S.localizeDataUnit(it)
+    }
+    // "358mb/100gb" or "549.81GB"
+    val usedPart = usedRaw.split('/', limit = 2).first().trim()
+    val usedLabel = org.olcbox.app.i18n.S.localizeDataUnit(usedPart)
+    val avail = available?.trim()?.takeIf { it.isNotBlank() }
     return when {
-        !used.isNullOrBlank() && !available.isNullOrBlank() -> "$used used · $available available"
-        !used.isNullOrBlank() -> "$used used"
-        !available.isNullOrBlank() -> "$available available"
-        else -> null
+        avail != null && (avail == "∞" || avail == "\u221e" ||
+            avail.equals("unlimited", true) ||
+            Regex("""(?i)^0(\.0+)?\s*(b|kb|mb|gb|tb)?$""").matches(avail)) ->
+            "$usedLabel/\u221e"
+        !avail.isNullOrBlank() ->
+            "$usedLabel/${org.olcbox.app.i18n.S.localizeDataUnit(avail)}"
+        else -> usedLabel
     }
 }
 

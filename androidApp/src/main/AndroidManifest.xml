@@ -77,6 +77,7 @@
             android:name="org.olcbox.app.vpn.service.OlcboxVpnService"
             android:permission="android.permission.BIND_VPN_SERVICE"
             android:exported="false"
+            android:process=":vpn"
             android:foregroundServiceType="specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
@@ -90,6 +91,16 @@
             android:name="org.olcbox.app.vpn.OlcRtcProbeService"
             android:exported="false"
             android:process=":olcrtc" />
+
+        <service
+            android:name="org.olcbox.app.vpn.MihomoProbeService"
+            android:exported="false"
+            android:process=":mihomo" />
+
+        <service
+            android:name="org.olcbox.app.vpn.OlcRtcRoutingService"
+            android:exported="false"
+            android:process=":route" />
 
         <!--
             Quick Settings tile — allows the user to toggle the VPN directly

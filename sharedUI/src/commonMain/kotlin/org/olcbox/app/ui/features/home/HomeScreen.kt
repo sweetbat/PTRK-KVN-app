@@ -8,11 +8,14 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -33,11 +36,11 @@ import kotlinx.coroutines.launch
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import org.olcbox.app.data.model.parseSubscriptionRefreshIntervalMs
+import org.olcbox.app.i18n.S
 import org.olcbox.app.ui.features.home.components.AddConfigurationSheet
 import org.olcbox.app.ui.features.home.components.HomeScreenAppBar
 import org.olcbox.app.ui.features.home.components.LocationSelectorScreen
 import org.olcbox.app.ui.features.home.components.LogsSheet
-import org.olcbox.app.ui.features.home.components.MihomoModeSelector
 import org.olcbox.app.ui.features.home.components.PtrkBrandHeader
 import org.olcbox.app.ui.features.home.components.PtrkConnectButton
 import org.olcbox.app.ui.features.home.components.SubscriptionCard
@@ -68,39 +71,25 @@ fun HomeScreen(
     var isAddSheetOpen by remember { mutableStateOf(false) }
     var isManualImportOpen by remember { mutableStateOf(false) }
     var manualImportText by remember { mutableStateOf("") }
+    var manualImportError by remember { mutableStateOf<String?>(null) }
+    var manualImportBusy by remember { mutableStateOf(false) }
     var manualSubscriptionRefresh by remember { mutableStateOf("") }
     var manualSubscriptionAllowInsecure by remember { mutableStateOf(false) }
     var updatingSubscriptionUrl by remember { mutableStateOf<String?>(null) }
 
     val state by viewModel.state.collectAsState()
+    val language by org.olcbox.app.i18n.AppLocale.language.collectAsState()
+    @Suppress("UNUSED_EXPRESSION")
+    language
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
     val pingsState = locationViewModel.pingsState
     val locations = locationViewModel.locations.toList()
-    val hasSubscriptions = locations.any { !it.subscriptionUrl.isNullOrBlank() }
 
     val requiresSetup = !state.canStartVpn && !state.isVpnConnected && !state.isVpnLoading
 
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         viewModel.onForeground()
-    }
-
-    fun refreshSubscriptions() {
-        viewModel.refreshSubscriptions { updatedCount ->
-            locationViewModel.loadLocations {
-                viewModel.restartVpnIfRunning()
-
-                val message = if (updatedCount > 0) {
-                    "Subscriptions updated: $updatedCount"
-                } else {
-                    "No subscriptions to update"
-                }
-
-                scope.launch {
-                    snackbarHostState.showSnackbar(message)
-                }
-            }
-        }
     }
 
     fun refreshHttpPings(targetLocationIds: List<String>? = null) {
@@ -112,38 +101,69 @@ fun HomeScreen(
         )
     }
 
-    fun updateSubscription(subscriptionUrl: String) {
-        if (updatingSubscriptionUrl != null) return
-        updatingSubscriptionUrl = subscriptionUrl
-        viewModel.refreshSubscription(
-            subscriptionUrl = subscriptionUrl,
-            onComplete = { updatedCount ->
+    fun updateSubscriptions(urls: List<String>) {
+        if (updatingSubscriptionUrl != null || urls.isEmpty()) return
+        updatingSubscriptionUrl = urls.first()
+        var index = 0
+        var totalUpdated = 0
+        fun next() {
+            if (index >= urls.size) {
                 locationViewModel.loadLocations {
                     viewModel.restartVpnIfRunning()
                     updatingSubscriptionUrl = null
                     scope.launch {
                         snackbarHostState.showSnackbar(
-                            if (updatedCount > 0) {
-                                "Subscription updated"
+                            if (totalUpdated > 0) {
+                                S.subscriptionUpdated
                             } else {
-                                "Subscription is already up to date"
+                                S.subscriptionsUpToDate
                             }
                         )
                     }
                 }
-            },
-            onError = { message ->
-                updatingSubscriptionUrl = null
-                scope.launch {
-                    snackbarHostState.showSnackbar("Could not update subscription: $message")
-                }
+                return
             }
-        )
+            val url = urls[index++]
+            updatingSubscriptionUrl = url
+            viewModel.refreshSubscription(
+                subscriptionUrl = url,
+                onComplete = { updatedCount ->
+                    totalUpdated += updatedCount
+                    next()
+                },
+                onError = { message ->
+                    updatingSubscriptionUrl = null
+                    scope.launch {
+                        snackbarHostState.showSnackbar(S.couldNotUpdateSubscription(message))
+                    }
+                }
+            )
+        }
+        next()
+    }
+
+    fun updateSubscription(subscriptionUrl: String) {
+        updateSubscriptions(listOf(subscriptionUrl))
+    }
+
+    fun updateAllSubscriptions() {
+        val urls = locations
+            .mapNotNull { it.subscriptionUrl?.trim()?.takeIf(String::isNotBlank) }
+            .distinct()
+        if (urls.isEmpty()) return
+        updateSubscriptions(urls)
     }
 
     Scaffold(
         snackbarHost = {
-            SnackbarHost(snackbarHostState)
+            // Keep errors visible above the IME / nav bar (import dialog + keyboard).
+            SnackbarHost(
+                hostState = snackbarHostState,
+                modifier = Modifier
+                    .imePadding()
+                    .navigationBarsPadding()
+                    .padding(bottom = 8.dp),
+            )
         },
         topBar = {
             HomeScreenAppBar(
@@ -170,22 +190,10 @@ fun HomeScreen(
 
             SubscriptionCard(
                 location = state.selectedLocation,
-                onRefreshClick = state.selectedLocation?.subscriptionUrl?.let { url ->
-                    { updateSubscription(url) }
+                onRefreshClick = state.selectedLocation?.subscriptionUrl?.let {
+                    { updateAllSubscriptions() }
                 },
             )
-
-            val showModes = state.configData.isMihomo() ||
-                state.selectedLocation?.config?.isMihomo() == true ||
-                locations.any { it.config?.isMihomo() == true }
-            if (showModes) {
-                Spacer(modifier = Modifier.height(12.dp))
-                MihomoModeSelector(
-                    selected = state.mihomoMode,
-                    enabled = !state.isVpnLoading,
-                    onSelected = { viewModel.setMihomoMode(it) },
-                )
-            }
 
             Spacer(modifier = Modifier.height(20.dp))
 
@@ -228,7 +236,8 @@ fun HomeScreen(
                     onOpenLocationSettings(id)
                 },
                 onAddLocationClick = {
-                    onAddLocation()
+                    // Same menu as the top-right "+" — not a separate create-only flow.
+                    isAddSheetOpen = true
                 }
             )
 
@@ -277,7 +286,6 @@ fun HomeScreen(
         if (isAddSheetOpen) {
             AddConfigurationSheet(
                 canScanQr = canScanQr,
-                hasSubscriptions = hasSubscriptions,
                 onDismiss = {
                     isAddSheetOpen = false
                 },
@@ -292,10 +300,6 @@ fun HomeScreen(
                 onImportFileClick = {
                     isAddSheetOpen = false
                     onImportFileRequested()
-                },
-                onUpdateSubscriptionsClick = {
-                    isAddSheetOpen = false
-                    refreshSubscriptions()
                 },
                 onAddCustomLocationClick = {
                     isAddSheetOpen = false
@@ -317,20 +321,26 @@ fun HomeScreen(
 
             AlertDialog(
                 onDismissRequest = {
+                    if (manualImportBusy) return@AlertDialog
                     isManualImportOpen = false
+                    manualImportError = null
                     manualSubscriptionRefresh = ""
                     manualSubscriptionAllowInsecure = false
                 },
-                title = { Text("Import link or URI") },
+                title = { Text(S.importLinkTitle) },
                 text = {
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         OutlinedTextField(
                             value = manualImportText,
-                            onValueChange = { manualImportText = it },
-                            label = { Text("HTTP, HTTPS, or olcrtc URI") },
-                            placeholder = { Text("https://example.org/subscription") },
+                            onValueChange = {
+                                manualImportText = it
+                                manualImportError = null
+                            },
+                            label = { Text(S.importLinkLabel) },
+                            placeholder = { Text(S.importLinkPlaceholder) },
                             minLines = 3,
                             maxLines = 6,
+                            isError = manualImportError != null,
                             modifier = Modifier.fillMaxWidth()
                         )
                         if (isSubscriptionUrl) {
@@ -342,14 +352,14 @@ fun HomeScreen(
                                         .filter { it.isDigit() || it in "smhd" }
                                         .take(8)
                                 },
-                                label = { Text("Subscription refresh rate") },
-                                placeholder = { Text("Auto") },
+                                label = { Text(S.subscriptionRefreshRate) },
+                                placeholder = { Text(S.auto) },
                                 supportingText = {
                                     Text(
                                         if (subscriptionRefreshError) {
-                                            "Use 5m–30d, for example 10m, 6h, or 1d"
+                                            S.subscriptionRefreshError
                                         } else {
-                                            "Optional. Empty implies default."
+                                            S.subscriptionRefreshOptional
                                         }
                                     )
                                 },
@@ -365,58 +375,72 @@ fun HomeScreen(
                                     checked = manualSubscriptionAllowInsecure,
                                     onCheckedChange = { manualSubscriptionAllowInsecure = it }
                                 )
-                                Text("Allow insecure requests")
+                                Text(S.allowInsecureRequests)
                             }
+                        }
+                        if (!manualImportError.isNullOrBlank()) {
+                            Text(
+                                text = manualImportError!!,
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
                         }
                     }
                 },
                 confirmButton = {
                     TextButton(
-                        enabled = manualImportText.isNotBlank() && !subscriptionRefreshError,
+                        enabled = manualImportText.isNotBlank() &&
+                            !subscriptionRefreshError &&
+                            !manualImportBusy,
                         onClick = {
+                            manualImportBusy = true
+                            manualImportError = null
                             viewModel.onImportFullConfig(
                                 rawText = manualImportText,
                                 subscriptionRefreshIntervalMs = subscriptionRefreshIntervalMs,
                                 allowInsecureSubscriptionRequests = manualSubscriptionAllowInsecure,
                                 onComplete = {
+                                    manualImportBusy = false
                                     isManualImportOpen = false
                                     manualImportText = ""
+                                    manualImportError = null
                                     manualSubscriptionRefresh = ""
                                     manualSubscriptionAllowInsecure = false
                                     locationViewModel.loadLocations {
                                         viewModel.loadCurrentConfig()
                                     }
                                     scope.launch {
-                                        snackbarHostState.showSnackbar("Configuration imported")
+                                        snackbarHostState.showSnackbar(S.configurationImported)
                                     }
                                 },
                                 onError = { message ->
-                                    scope.launch {
-                                        snackbarHostState.showSnackbar(message)
-                                    }
+                                    manualImportBusy = false
+                                    // Keep dialog open and show the error inside it (above IME /
+                                    // not buried under the modal).
+                                    manualImportError = message
                                 }
                             )
                         }
                     ) {
-                        Text("Import")
+                        Text(S.importAction)
                     }
                 },
                 dismissButton = {
                     TextButton(
+                        enabled = !manualImportBusy,
                         onClick = {
                             viewModel.readImportTextFromClipboard(
                                 onText = { text ->
                                     manualImportText = text
+                                    manualImportError = null
                                 },
                                 { message ->
-                                    scope.launch {
-                                        snackbarHostState.showSnackbar(message)
-                                    }
+                                    manualImportError = message
                                 }
                             )
                         }
                     ) {
-                        Text("Paste clipboard")
+                        Text(S.pasteFromClipboard)
                     }
                 }
             )

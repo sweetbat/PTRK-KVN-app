@@ -52,29 +52,10 @@ fun PtrkBrandHeader() {
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier.fillMaxWidth()
     ) {
-        Box(
-            modifier = Modifier
-                .size(72.dp)
-                .clip(RoundedCornerShape(18.dp))
-                .background(MaterialTheme.colorScheme.primary),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                text = "P",
-                color = MaterialTheme.colorScheme.onPrimary,
-                style = MaterialTheme.typography.headlineLarge.copy(fontWeight = FontWeight.Bold),
-            )
-        }
-        Box(modifier = Modifier.height(10.dp))
-        Text(
-            text = S.appName,
-            style = MaterialTheme.typography.headlineMedium.copy(
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 1.2.sp,
-            ),
-            color = MaterialTheme.colorScheme.onSurface,
+        PtrkLogoImage(
+            contentDescription = S.appName,
+            modifier = Modifier.size(96.dp),
         )
-        // Keep language in composition graph so labels refresh.
         @Suppress("UNUSED_EXPRESSION")
         language
     }
@@ -85,20 +66,40 @@ fun SubscriptionCard(
     location: LocationItem?,
     onRefreshClick: (() -> Unit)? = null,
 ) {
+    val language by org.olcbox.app.i18n.AppLocale.language.collectAsState()
+    @Suppress("UNUSED_EXPRESSION")
+    language
     val sub = location?.metadata?.subscription
-    val title = (sub?.name
-        ?: location?.subscriptionUrl?.substringAfterLast('/')
-        ?: location?.fullName
-        ?: org.olcbox.app.i18n.S.noSubscription)
+    val urlToken = location?.subscriptionUrl
+        ?.substringAfterLast('/')
+        ?.trim()
+        ?.takeIf { it.isNotBlank() }
+    val rawTitle = sub?.name?.trim()?.takeIf { it.isNotBlank() }
+        ?.takeUnless { it == urlToken }
+    val title = (rawTitle
+        ?: location?.fullName?.takeUnless { it == urlToken || it.equals("regular", true) || it.equals("bypass", true) }
+        ?: org.olcbox.app.i18n.S.appName)
         .removePrefix("Olc ")
         .removePrefix("olc ")
         .trim()
         .ifBlank { org.olcbox.app.i18n.S.appName }
-    val traffic = listOfNotNull(sub?.used, sub?.available)
-        .takeIf { it.size == 2 }
-        ?.let { "${it[0]} / ${it[1]}" }
-        ?: sub?.used
-    val expire = sub?.description ?: sub?.comment
+    val traffic = when {
+        !sub?.used.isNullOrBlank() && !sub?.available.isNullOrBlank() ->
+            org.olcbox.app.i18n.S.trafficSummary(sub!!.used!!, sub.available!!)
+        !sub?.used.isNullOrBlank() -> org.olcbox.app.i18n.S.localizeDataUnit(sub!!.used!!)
+        else -> null
+    }
+    fun usableStatus(value: String?): String? {
+        val v = value?.trim()?.takeIf { it.isNotBlank() } ?: return null
+        if (v.equals("regular", ignoreCase = true) || v.equals("bypass", ignoreCase = true)) {
+            return null
+        }
+        return v
+    }
+    // Prefer explicit expire date; also accept values that look like dd.MM.yyyy.
+    val expire = usableStatus(sub?.description)
+        ?.takeIf { it == "\u221e" || it == "∞" || it.contains('.') || it.contains('-') || it.any { ch -> ch.isDigit() } }
+        ?: usableStatus(sub?.comment)?.takeIf { it.contains('.') || it == "\u221e" }
     val engine = when {
         location?.config?.isMihomo() == true -> org.olcbox.app.i18n.S.mihomoEngine
         location != null -> org.olcbox.app.i18n.S.olcrtcEngine
@@ -156,7 +157,7 @@ fun SubscriptionCard(
         }
         if (!traffic.isNullOrBlank() || !expire.isNullOrBlank()) {
             Box(modifier = Modifier.height(10.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (!traffic.isNullOrBlank()) {
                     Column {
                         Text(
@@ -170,7 +171,7 @@ fun SubscriptionCard(
                 if (!expire.isNullOrBlank()) {
                     Column {
                         Text(
-                            text = org.olcbox.app.i18n.S.status,
+                            text = org.olcbox.app.i18n.S.subscriptionExpires,
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -196,49 +197,64 @@ fun MihomoModeSelector(
     selected: String,
     enabled: Boolean,
     onSelected: (String) -> Unit,
+    showTitle: Boolean = true,
 ) {
     val language by AppLocale.language.collectAsState()
+    // Routing on = Clash rule mode (RU whitelist DIRECT). Off = global (all via node).
     val modes = listOf(
         "rule" to S.modeRule,
         "global" to S.modeGlobal,
-        "direct" to S.modeDirect,
     )
+    val normalized = when (selected.lowercase()) {
+        "global", "direct" -> "global"
+        else -> "rule"
+    }
     @Suppress("UNUSED_EXPRESSION")
     language
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainer)
-            .padding(4.dp),
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        modes.forEach { (value, label) ->
-            val active = selected.equals(value, ignoreCase = true)
-            val bg by animateColorAsState(
-                if (active) MaterialTheme.colorScheme.primary else Color.Transparent,
-                label = "modeBg",
+    Column(modifier = Modifier.fillMaxWidth()) {
+        if (showTitle) {
+            Text(
+                text = S.routingTitle,
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.padding(bottom = 8.dp),
             )
-            val fg by animateColorAsState(
-                if (active) MaterialTheme.colorScheme.onPrimary
-                else MaterialTheme.colorScheme.onSurfaceVariant,
-                label = "modeFg",
-            )
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(bg)
-                    .clickable(enabled = enabled) { onSelected(value) }
-                    .padding(vertical = 10.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = label,
-                    color = fg,
-                    style = MaterialTheme.typography.labelLarge,
-                    maxLines = 1,
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .background(MaterialTheme.colorScheme.surfaceContainer)
+                .padding(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            modes.forEach { (value, label) ->
+                val active = normalized == value
+                val bg by animateColorAsState(
+                    if (active) MaterialTheme.colorScheme.primary else Color.Transparent,
+                    label = "modeBg",
                 )
+                val fg by animateColorAsState(
+                    if (active) MaterialTheme.colorScheme.onPrimary
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                    label = "modeFg",
+                )
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(bg)
+                        .clickable(enabled = enabled) { onSelected(value) }
+                        .padding(vertical = 10.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = label,
+                        color = fg,
+                        style = MaterialTheme.typography.labelLarge,
+                        maxLines = 1,
+                    )
+                }
             }
         }
     }

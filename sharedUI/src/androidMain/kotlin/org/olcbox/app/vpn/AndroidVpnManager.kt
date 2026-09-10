@@ -8,26 +8,26 @@ import android.net.VpnService
 import android.os.Build
 import androidx.core.content.ContextCompat
 import androidx.datastore.preferences.core.edit
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import android.os.Handler
+import android.os.Looper
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.datasource.LocationsDataSourceImpl
 import org.olcbox.app.data.identity.PersistentDeviceIdentityProvider
 import org.olcbox.app.data.mihomo.mihomoProfilePath
 import org.olcbox.app.data.repository.SubscriptionFetchProxy
-import org.olcbox.app.mihomo.MihomoEngine
 import org.olcbox.app.vpn.data.KEY_ANDROID_CONNECTION_MODE
 import org.olcbox.app.vpn.data.KEY_ANDROID_DYNAMIC_THEME
 import org.olcbox.app.vpn.data.KEY_ANDROID_SPLIT_TUNNEL_BYPASS_APPS
@@ -39,6 +39,7 @@ import org.olcbox.app.vpn.data.KEY_ANDROID_SOCKS_PORT
 import org.olcbox.app.vpn.data.KEY_ANDROID_SOCKS_USERNAME
 import org.olcbox.app.vpn.data.KEY_ANDROID_SOCKS_USERNAME_INITIALIZED
 import org.olcbox.app.vpn.data.KEY_MIHOMO_MODE
+import org.olcbox.app.vpn.data.MihomoModeStore
 import org.olcbox.app.vpn.data.vpnPrefDataStore
 import org.olcbox.app.vpn.service.OlcboxVpnActions
 import kotlinx.coroutines.flow.first
@@ -48,6 +49,15 @@ import java.security.SecureRandom
 class AndroidVpnManager(private val context: Context) : VpnManager {
     private val appContext = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val mihomoPingMutex = Mutex()
+    private val mihomoPingWaiters =
+        mutableMapOf<String, MutableList<CompletableDeferred<Long?>>>()
+    private var mihomoPingFlushScheduled = false
+
+    init {
+        org.olcbox.app.vpn.service.VpnStatusBridge.ensureRegistered(appContext)
+    }
     private val _connectionMode = MutableStateFlow(AndroidConnectionMode.Tun)
     private val _proxySettings = MutableStateFlow(AndroidSocksProxySettings())
     private val _splitTunnelSettings = MutableStateFlow(AndroidSplitTunnelSettings())
@@ -57,9 +67,10 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
         LocationsDataSourceImpl(appContext)
     )
 
-    override val logs: StateFlow<List<String>> = OlcboxVpnState.logs
-    override val status: StateFlow<VpnStatus> = OlcboxVpnState.status
-    override val isConnected: StateFlow<Boolean> = OlcboxVpnState.isConnected
+    // VpnService runs in `:vpn`; mirror status/logs via broadcast bridge.
+    override val logs: StateFlow<List<String>> = org.olcbox.app.vpn.service.VpnStatusBridge.logs
+    override val status: StateFlow<VpnStatus> = org.olcbox.app.vpn.service.VpnStatusBridge.status
+    override val isConnected: StateFlow<Boolean> = org.olcbox.app.vpn.service.VpnStatusBridge.isConnected
     val connectionMode: StateFlow<AndroidConnectionMode> = _connectionMode.asStateFlow()
     val proxySettings: StateFlow<AndroidSocksProxySettings> = _proxySettings.asStateFlow()
     val splitTunnelSettings: StateFlow<AndroidSplitTunnelSettings> = _splitTunnelSettings.asStateFlow()
@@ -218,43 +229,183 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
     }
 
     override fun startVpn() {
-        val intent = Intent().apply {
-            setClassName(context.packageName, OlcboxVpnActions.SERVICE_CLASS_NAME)
-            action = OlcboxVpnActions.ACTION_START_VPN
-            putExtra(OlcboxVpnActions.EXTRA_CONNECTION_MODE, _connectionMode.value.value)
-            putExtra(OlcboxVpnActions.EXTRA_SOCKS_HOST, _proxySettings.value.host)
-            putExtra(OlcboxVpnActions.EXTRA_SOCKS_PORT, _proxySettings.value.port)
-            putExtra(OlcboxVpnActions.EXTRA_SOCKS_USERNAME, _proxySettings.value.username)
-            putExtra(OlcboxVpnActions.EXTRA_SOCKS_PASSWORD, _proxySettings.value.password)
-            putExtra(OlcboxVpnActions.EXTRA_SPLIT_TUNNEL_MODE, _splitTunnelSettings.value.mode.value)
-            putStringArrayListExtra(
-                OlcboxVpnActions.EXTRA_SPLIT_TUNNEL_PROXY_APPS,
-                ArrayList(_splitTunnelSettings.value.proxyPackages)
-            )
-            putStringArrayListExtra(
-                OlcboxVpnActions.EXTRA_SPLIT_TUNNEL_BYPASS_APPS,
-                ArrayList(_splitTunnelSettings.value.bypassPackages)
-            )
+        org.olcbox.app.vpn.service.VpnStatusBridge.markConnecting()
+        prepareActiveEngine()
+        val intent = buildStartIntent()
+        launchVpnService(intent)
+        // Only retry if :vpn never acked — do not interrupt an in-flight handshake.
+        mainHandler.postDelayed({
+            val bridge = org.olcbox.app.vpn.service.VpnStatusBridge
+            if (!bridge.serviceAcked && bridge.status.value is VpnStatus.Connecting) {
+                android.util.Log.w("AndroidVpnManager", "retry START_VPN (no :vpn ack)")
+                launchVpnService(intent)
+            }
+        }, 1_500)
+        mainHandler.postDelayed({
+            val bridge = org.olcbox.app.vpn.service.VpnStatusBridge
+            if (!bridge.serviceAcked && bridge.status.value is VpnStatus.Connecting) {
+                android.util.Log.w("AndroidVpnManager", "second retry START_VPN")
+                launchVpnService(intent)
+            }
+        }, 4_000)
+    }
+
+    override fun prepareActiveEngine() {
+        recycleVpnProcessIfNeeded()
+        when (readActiveEngine()) {
+            "mihomo" -> {
+                killEngineProcess(":olcrtc")
+                killEngineProcess(":route")
+            }
+            "olcrtc" -> {
+                killEngineProcess(":mihomo")
+                // `:route` is started later by VPN when routing is ON.
+                killEngineProcess(":route")
+            }
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            ContextCompat.startForegroundService(context, intent)
-        } else {
-            context.startService(intent)
+    }
+
+    private fun recycleVpnProcessIfNeeded() {
+        val gojni = java.io.File(appContext.filesDir, "vpn_gojni_loaded").exists()
+        val clash = java.io.File(appContext.filesDir, "vpn_clash_loaded").exists()
+        val activeEngine = readActiveEngine()
+        val needKill = when (activeEngine) {
+            // Starting Mihomo after olcRTC loaded gojni into :vpn
+            "mihomo" -> gojni
+            // Starting olcRTC after Mihomo loaded libclash into :vpn
+            "olcrtc" -> clash
+            else -> false
+        }
+        if (!needKill) return
+        val am = appContext.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+        val vpnPid = am.runningAppProcesses
+            ?.firstOrNull { it.processName == "${appContext.packageName}:vpn" }
+            ?.pid
+        if (vpnPid != null && vpnPid > 0) {
+            android.util.Log.w(
+                "AndroidVpnManager",
+                "killing :vpn pid=$vpnPid for engine switch → $activeEngine"
+            )
+            runCatching { android.os.Process.killProcess(vpnPid) }
+            try {
+                Thread.sleep(500)
+            } catch (_: InterruptedException) {
+            }
+        }
+        runCatching { java.io.File(appContext.filesDir, "vpn_gojni_loaded").delete() }
+        runCatching { java.io.File(appContext.filesDir, "vpn_clash_loaded").delete() }
+    }
+
+    private fun readActiveEngine(): String {
+        return runCatching {
+            val active = java.io.File(appContext.filesDir, "active_location.json")
+                .takeIf { it.exists() }
+                ?.readText()
+                .orEmpty()
+            when {
+                active.contains("\"engine\":\"mihomo\"", ignoreCase = true) ||
+                    active.contains("\"mihomo_proxy\"", ignoreCase = true) -> "mihomo"
+                active.contains("\"engine\":\"olcrtc\"", ignoreCase = true) ||
+                    active.contains("olcrtc://", ignoreCase = true) ||
+                    active.contains("\"auth_provider\"", ignoreCase = true) -> "olcrtc"
+                else -> {
+                    // Fallback: active_location_id from bundle
+                    val bundle = java.io.File(appContext.filesDir, "locations_v4.json")
+                        .takeIf { it.exists() }
+                        ?.readText()
+                        .orEmpty()
+                    val idMatch = Regex(""""active_location_id"\s*:\s*"([^"]+)"""")
+                        .find(bundle)
+                        ?.groupValues
+                        ?.getOrNull(1)
+                    if (idMatch != null) {
+                        val idx = bundle.indexOf("\"storage_id\": \"$idMatch\"")
+                            .takeIf { it >= 0 }
+                            ?: bundle.indexOf("\"storage_id\":\"$idMatch\"")
+                        if (idx >= 0) {
+                            val slice = bundle.substring(idx, (idx + 800).coerceAtMost(bundle.length))
+                            when {
+                                slice.contains("\"engine\": \"mihomo\"") ||
+                                    slice.contains("\"engine\":\"mihomo\"") ||
+                                    slice.contains("\"mihomo_proxy\"") -> "mihomo"
+                                else -> "olcrtc"
+                            }
+                        } else "olcrtc"
+                    } else "olcrtc"
+                }
+            }
+        }.getOrDefault("olcrtc")
+    }
+
+    private fun buildStartIntent(): Intent = Intent().apply {
+        setClassName(context.packageName, OlcboxVpnActions.SERVICE_CLASS_NAME)
+        action = OlcboxVpnActions.ACTION_START_VPN
+        putExtra(OlcboxVpnActions.EXTRA_CONNECTION_MODE, _connectionMode.value.value)
+        putExtra(OlcboxVpnActions.EXTRA_SOCKS_HOST, _proxySettings.value.host)
+        putExtra(OlcboxVpnActions.EXTRA_SOCKS_PORT, _proxySettings.value.port)
+        putExtra(OlcboxVpnActions.EXTRA_SOCKS_USERNAME, _proxySettings.value.username)
+        putExtra(OlcboxVpnActions.EXTRA_SOCKS_PASSWORD, _proxySettings.value.password)
+        putExtra(OlcboxVpnActions.EXTRA_SPLIT_TUNNEL_MODE, _splitTunnelSettings.value.mode.value)
+        putStringArrayListExtra(
+            OlcboxVpnActions.EXTRA_SPLIT_TUNNEL_PROXY_APPS,
+            ArrayList(_splitTunnelSettings.value.proxyPackages)
+        )
+        putStringArrayListExtra(
+            OlcboxVpnActions.EXTRA_SPLIT_TUNNEL_BYPASS_APPS,
+            ArrayList(_splitTunnelSettings.value.bypassPackages)
+        )
+        putExtra(
+            OlcboxVpnActions.EXTRA_MIHOMO_MODE,
+            runCatching {
+                kotlinx.coroutines.runBlocking {
+                    MihomoModeStore.resolve(
+                        context = appContext,
+                        dataStoreValue = appContext.vpnPrefDataStore.data.first()[KEY_MIHOMO_MODE],
+                    )
+                }
+            }.getOrElse { MihomoModeStore.read(appContext) },
+        )
+    }
+
+    private fun launchVpnService(intent: Intent) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                ContextCompat.startForegroundService(context, intent)
+            } else {
+                context.startService(intent)
+            }
+        } catch (error: Throwable) {
+            android.util.Log.e("AndroidVpnManager", "startForegroundService failed", error)
+            runCatching { context.startService(intent) }.onFailure {
+                org.olcbox.app.vpn.service.VpnStatusBridge.markDisconnected()
+            }
         }
     }
 
     override fun stopVpn() {
+        org.olcbox.app.vpn.service.VpnStatusBridge.markStopping()
         val intent = Intent().apply {
             setClassName(context.packageName, OlcboxVpnActions.SERVICE_CLASS_NAME)
             action = OlcboxVpnActions.ACTION_STOP_VPN
         }
-        context.startService(intent)
+        runCatching { context.startService(intent) }
+            .onFailure { android.util.Log.e("AndroidVpnManager", "stopVpn startService failed", it) }
+        // Second kick — first STOP is sometimes ignored while :vpn is mid-start.
+        mainHandler.postDelayed({
+            if (status.value is VpnStatus.Stopping || status.value is VpnStatus.Connected) {
+                runCatching { context.startService(intent) }
+            }
+        }, 600)
     }
 
     override suspend fun ping(locationConfig: LocationConfig): Long? {
         if (locationConfig.isMihomo()) {
+            killEngineProcess(":olcrtc")
+            killEngineProcess(":route")
             return pingMihomo(locationConfig)
         }
+        killEngineProcess(":mihomo")
+        killEngineProcess(":route")
         return OlcRtcConnectionChecker.ping(
             locationConfig = locationConfig,
             deviceId = deviceIdentityProvider.hwid()
@@ -263,63 +414,103 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
 
     override suspend fun checkConnection(locationConfig: LocationConfig): Long? {
         if (locationConfig.isMihomo()) {
+            killEngineProcess(":olcrtc")
+            killEngineProcess(":route")
             return pingMihomo(locationConfig)
         }
+        killEngineProcess(":mihomo")
+        killEngineProcess(":route")
         return OlcRtcConnectionChecker.check(
             locationConfig = locationConfig,
             deviceId = deviceIdentityProvider.hwid()
         )
     }
 
-    private suspend fun pingMihomo(locationConfig: LocationConfig): Long? = withContext(Dispatchers.IO) {
-        runCatching {
-            val proxyName = locationConfig.id.trim()
-            if (proxyName.isBlank()) return@runCatching null
-            MihomoEngine.ensureInit(appContext)
-            val path = mihomoProfilePath(locationConfig.mihomoProfileId)
-                ?: return@runCatching null
-            val mode = appContext.vpnPrefDataStore.data.first()[KEY_MIHOMO_MODE]
-                ?.lowercase()
-                ?.takeIf { it in setOf("rule", "global", "direct") }
-                ?: "rule"
-            MihomoEngine.setupProfile(
-                context = appContext,
-                yamlPath = path,
-                selectedMap = mapOf(
-                    "GLOBAL" to proxyName,
-                    "PROXY" to proxyName,
-                ),
-                mode = mode,
-            )
-            runCatching { MihomoEngine.selectProxyPreferringGroups(proxyName) }
-            val delay = MihomoEngine.urlTest(proxyName)
-            delay.takeIf { it > 0L }
-        }.onFailure {
-            android.util.Log.w("AndroidVpnManager", "mihomo ping failed: ${it.message}")
-        }.getOrNull()
+    private fun killEngineProcess(suffix: String) {
+        val am = appContext.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+        val pid = am.runningAppProcesses
+            ?.firstOrNull { it.processName == "${appContext.packageName}$suffix" }
+            ?.pid
+            ?: return
+        if (pid > 0) {
+            runCatching { android.os.Process.killProcess(pid) }
+        }
+    }
+
+    private suspend fun pingMihomo(locationConfig: LocationConfig): Long? {
+        val proxyName = locationConfig.id.trim()
+        val profileId = locationConfig.mihomoProfileId.trim()
+        if (proxyName.isBlank() || profileId.isBlank()) return null
+        if (mihomoProfilePath(profileId) == null) return null
+
+        val deferred = CompletableDeferred<Long?>()
+        mihomoPingMutex.withLock {
+            mihomoPingWaiters.getOrPut(proxyName) { mutableListOf() }.add(deferred)
+            if (!mihomoPingFlushScheduled) {
+                mihomoPingFlushScheduled = true
+                scope.launch {
+                    delay(120)
+                    flushMihomoPingBatch(profileId)
+                }
+            }
+        }
+        return deferred.await()
+    }
+
+    private suspend fun flushMihomoPingBatch(profileId: String) {
+        val waiters = mihomoPingMutex.withLock {
+            mihomoPingFlushScheduled = false
+            val copy = mihomoPingWaiters.toMap().mapValues { it.value.toList() }
+            mihomoPingWaiters.clear()
+            copy
+        }
+        if (waiters.isEmpty()) return
+        val mode = MihomoModeStore.resolve(
+            context = appContext,
+            dataStoreValue = appContext.vpnPrefDataStore.data.first()[KEY_MIHOMO_MODE],
+        )
+        val results = withContext(Dispatchers.IO) {
+            runCatching {
+                MihomoProbeService.pingMany(
+                    context = appContext,
+                    proxyNames = waiters.keys.toList(),
+                    profileId = profileId,
+                    mode = mode,
+                )
+            }.onFailure {
+                android.util.Log.w("AndroidVpnManager", "mihomo batch ping failed: ${it.message}")
+            }.getOrDefault(emptyMap())
+        }
+        waiters.forEach { (name, deferreds) ->
+            val value = results[name]
+            deferreds.forEach { it.complete(value) }
+        }
     }
 
     override fun mihomoMode(): String {
         return runCatching {
             kotlinx.coroutines.runBlocking {
-                appContext.vpnPrefDataStore.data.first()[KEY_MIHOMO_MODE]
+                MihomoModeStore.resolve(
+                    context = appContext,
+                    dataStoreValue = appContext.vpnPrefDataStore.data.first()[KEY_MIHOMO_MODE],
+                )
             }
-        }.getOrNull()?.lowercase()?.takeIf {
-            it in setOf("rule", "global", "direct")
-        } ?: "rule"
+        }.getOrElse { MihomoModeStore.read(appContext) }
     }
 
     override fun mihomoModeFlow(): kotlinx.coroutines.flow.Flow<String> =
         appContext.vpnPrefDataStore.data.map { prefs ->
-            prefs[KEY_MIHOMO_MODE]?.lowercase()?.takeIf {
-                it in setOf("rule", "global", "direct")
-            } ?: "rule"
+            MihomoModeStore.resolve(
+                context = appContext,
+                dataStoreValue = prefs[KEY_MIHOMO_MODE],
+            )
         }
 
     override suspend fun setMihomoMode(mode: String) {
-        val normalized = mode.lowercase().takeIf { it in setOf("rule", "global", "direct") } ?: "rule"
+        val normalized = MihomoModeStore.normalize(mode)
+        // File first so `:vpn` never starts with a stale DataStore `rule`.
+        MihomoModeStore.write(appContext, normalized)
         appContext.vpnPrefDataStore.edit { it[KEY_MIHOMO_MODE] = normalized }
-        runCatching { MihomoEngine.setMode(normalized) }
     }
 
     override fun subscriptionFetchProxy(): SubscriptionFetchProxy? {

@@ -3,6 +3,9 @@ package org.olcbox.app.data.datasource
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.darwin.Darwin
 import io.ktor.client.plugins.HttpTimeout
+import io.ktor.client.request.get
+import io.ktor.client.request.headers
+import io.ktor.client.statement.bodyAsText
 import kotlinx.cinterop.BetaInteropApi
 import kotlinx.cinterop.ExperimentalForeignApi
 import org.olcbox.app.data.repository.SubscriptionFetchProxy
@@ -54,3 +57,32 @@ internal actual suspend fun <T> withProxyAuthentication(
     subscriptionProxy: SubscriptionFetchProxy?,
     block: suspend () -> T
 ): T = block()
+
+internal actual suspend fun downloadSubscriptionBodyDirect(
+    url: String,
+    hwid: String?,
+    allowInsecureRequests: Boolean,
+    connectTimeoutMs: Long,
+    requestTimeoutMs: Long,
+    socketTimeoutMs: Long,
+): DirectSubscriptionDownload {
+    val client = createProxyHttpClient(
+        connectTimeoutMs = connectTimeoutMs,
+        requestTimeoutMs = requestTimeoutMs,
+        socketTimeoutMs = socketTimeoutMs,
+        allowInsecureRequests = allowInsecureRequests,
+    )
+    return try {
+        val response = client.get(url) {
+            headers {
+                append(io.ktor.http.HttpHeaders.Accept, "text/yaml, */*")
+                remove(io.ktor.http.HttpHeaders.UserAgent)
+                append(io.ktor.http.HttpHeaders.UserAgent, "ClashMeta/1.19.0")
+                if (!hwid.isNullOrBlank()) append("x-hwid", hwid)
+            }
+        }
+        DirectSubscriptionDownload(content = response.bodyAsText())
+    } finally {
+        client.close()
+    }
+}

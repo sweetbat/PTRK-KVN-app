@@ -325,7 +325,10 @@ private fun SharedSettingsHubContent(
 
         SharedNavigationRow(
             title = "Update Settings",
-            value = "Nightly · every ${updateSettings.intervalHours}h",
+            value = org.olcbox.app.i18n.S.updateChannelSummary(
+                updateSettings.seeksBeta,
+                updateSettings.intervalHours,
+            ),
             icon = Icons.Outlined.Refresh,
             onClick = onUpdatesClick
         )

@@ -26,6 +26,26 @@ object MihomoEngine {
     @Volatile private var initialized = false
     @Volatile private var mode: String = "rule"
 
+    private val RULES_SECTION = Regex("""(?m)^rules\s*:""")
+
+    const val DEFAULT_TEST_URL = "http://cp.cloudflare.com/generate_204"
+
+    private val TEST_URLS = listOf(
+        DEFAULT_TEST_URL,
+        "http://connectivitycheck.gstatic.com/generate_204",
+        "http://www.gstatic.com/generate_204",
+        "http://captive.apple.com/hotspot-detect.html",
+    )
+
+    /** Always via selected node — Mihomo has no Xray TLS fragment for DIRECT. */
+    private val YOUTUBE_VIA_GLOBAL_RULES = listOf(
+        "DOMAIN-KEYWORD,youtube,GLOBAL",
+        "DOMAIN-KEYWORD,googlevideo,GLOBAL",
+        "DOMAIN-KEYWORD,ytimg,GLOBAL",
+        "DOMAIN-SUFFIX,youtu.be,GLOBAL",
+        "DOMAIN-SUFFIX,ggpht.com,GLOBAL",
+    )
+
     suspend fun ensureInit(context: Context) {
         lock.withLock {
             if (initialized) return@withLock
@@ -54,23 +74,147 @@ object MihomoEngine {
         yamlPath: String,
         selectedMap: Map<String, String> = emptyMap(),
         mode: String = this.mode,
+        /** Plain DNS IPs for resolving proxy hosts (use carrier DNS on cellular). */
+        bootstrapDns: List<String> = emptyList(),
+        testUrl: String = DEFAULT_TEST_URL,
     ): String = lock.withLock {
         ensureInitUnlocked(context)
         this.mode = mode
         val selected = JSONObject()
         selectedMap.forEach { (k, v) -> selected.put(k, v) }
+        // No Xray-style TLS fragment in Mihomo: YouTube via DIRECT is broken under
+        // RU throttling, so always pin youtube/googlevideo through GLOBAL (selected node).
+        val configPath = if (mode.equals("global", ignoreCase = true)) {
+            yamlPath
+        } else {
+            runtimeConfigWithForcedProxyDomains(yamlPath)
+        }
+        val dnsBootstrap = bootstrapDns
+            .map { it.trim() }
+            .filter { it.isNotBlank() && ':' !in it }
+            .distinct()
+            .ifEmpty { listOf("8.8.8.8", "1.1.1.1") }
+        val dnsBootstrapJson = org.json.JSONArray().also { arr ->
+            dnsBootstrap.forEach { arr.put(it) }
+        }
         val overrides = JSONObject()
             .put("mode", mode)
             .put("ipv6", false)
-            .put("tun", JSONObject().put("enable", false)) // we attach fd ourselves
+            // Keep a local mixed-port so we can diagnose; VpnService path does not need it.
+            .put("mixed-port", 7890)
+            .put(
+                "tun",
+                JSONObject()
+                    .put("enable", false)
+                    // Xiaomi/MIUI: mixed/gvisor often accepts UDP DNS but stalls TCP.
+                    .put("stack", "system")
+                    .put("auto-route", false)
+                    .put("auto-detect-interface", false)
+                    .put("mtu", 1500)
+                    .put(
+                        "dns-hijack",
+                        org.json.JSONArray().put("any:53"),
+                    ),
+            )
+            .put("find-process-mode", "off")
+            // Required with hev/SOCKS: recover Host/SNI so domain rules (Минцифры /
+            // antizapret) match instead of GEOIP on the SOCKS destination IP.
+            .put(
+                "sniffer",
+                JSONObject()
+                    .put("enable", true)
+                    .put("force-dns-mapping", true)
+                    .put("parse-pure-ip", true)
+                    .put("override-destination", true)
+                    .put(
+                        "sniff",
+                        JSONObject()
+                            .put(
+                                "HTTP",
+                                JSONObject()
+                                    .put(
+                                        "ports",
+                                        org.json.JSONArray().put("80").put("8080-8880"),
+                                    )
+                                    .put("override-destination", true),
+                            )
+                            .put(
+                                "TLS",
+                                JSONObject()
+                                    .put(
+                                        "ports",
+                                        org.json.JSONArray().put("443").put("8443"),
+                                    ),
+                            )
+                            .put(
+                                "QUIC",
+                                JSONObject()
+                                    .put(
+                                        "ports",
+                                        org.json.JSONArray().put("443").put("8443"),
+                                    ),
+                            ),
+                    ),
+            )
+            .put(
+                "dns",
+                JSONObject()
+                    .put("enable", true)
+                    .put("ipv6", false)
+                    // Real IPs (no Clash fake-ip): hev must not use mapdns 100.64/10,
+                    // which Clash treats as private → DIRECT and breaks rule mode.
+                    .put("enhanced-mode", "redir-host")
+                    .put("listen", "0.0.0.0:1053")
+                    .put(
+                        "nameserver",
+                        org.json.JSONArray()
+                            .put("https://dns.google/dns-query")
+                            .put("https://1.1.1.1/dns-query")
+                            .put("8.8.8.8"),
+                    )
+                    .put("default-nameserver", dnsBootstrapJson)
+                    .put("proxy-server-nameserver", dnsBootstrapJson)
+                    .put("direct-nameserver", dnsBootstrapJson),
+            )
+        // Routing off: wipe subscription rules (RU whitelist would still DIRECT).
+        // Keep YouTube pin at the top even though MATCH,GLOBAL already covers it.
+        if (mode.equals("global", ignoreCase = true)) {
+            val rules = org.json.JSONArray()
+            YOUTUBE_VIA_GLOBAL_RULES.forEach { rules.put(it) }
+            rules.put("GEOIP,private,DIRECT,no-resolve")
+            rules.put("MATCH,GLOBAL")
+            overrides.put("rules", rules)
+        }
         val params = JSONObject()
-            .put("config-path", yamlPath)
+            .put("config-path", configPath)
             .put("overrides", overrides)
             .put("home-dir", homeDir)
             .put("selected-map", selected)
-            .put("test-url", "https://www.gstatic.com/generate_204")
+            .put("test-url", testUrl)
             .toString()
         invoke("setupConfig", params)
+    }
+
+    /**
+     * Prepend YouTube force-proxy rules so subscription DIRECT/whitelist cannot win.
+     * Writes sibling `*.runtime.yaml` — original profile on disk stays untouched.
+     */
+    private fun runtimeConfigWithForcedProxyDomains(yamlPath: String): String {
+        val src = File(yamlPath)
+        if (!src.isFile) return yamlPath
+        val dest = File(src.parentFile, "${src.nameWithoutExtension}.runtime.yaml")
+        val body = src.readText()
+        val insert = YOUTUBE_VIA_GLOBAL_RULES.joinToString("\n") { "  - $it" } + "\n"
+        val match = RULES_SECTION.find(body)
+        val patched = if (match != null) {
+            val lineEnd = body.indexOf('\n', match.range.last).let { if (it < 0) body.length else it + 1 }
+            body.substring(0, lineEnd) + insert + body.substring(lineEnd)
+        } else {
+            body.trimEnd() + "\n\nrules:\n" + insert
+        }
+        dest.writeText(patched)
+        Log.i(TAG, "YouTube via GLOBAL prepended -> ${dest.name}")
+        return dest.absolutePath
     }
 
     suspend fun setMode(mode: String): String {
@@ -89,15 +233,51 @@ object MihomoEngine {
 
     suspend fun getProxiesJson(): String = invoke("getProxies", "")
 
-    suspend fun urlTest(proxyName: String, testUrl: String = "https://www.gstatic.com/generate_204"): Long {
+    suspend fun urlTest(
+        proxyName: String,
+        testUrl: String = DEFAULT_TEST_URL,
+        timeoutMs: Long = 10_000L,
+    ): Long {
         val params = JSONObject()
             .put("proxy-name", proxyName)
             .put("test-url", testUrl)
-            .put("timeout", 5000)
+            .put("timeout", timeoutMs.toInt().coerceIn(3_000, 20_000))
             .toString()
-        val raw = invoke("asyncTestDelay", params)
-        return raw.toLongOrNull()
-            ?: runCatching { JSONObject(raw).optLong("delay", -1L) }.getOrDefault(-1L)
+        val raw = invoke("asyncTestDelay", params, timeoutMs = timeoutMs + 4_000L)
+        return parseDelayMs(raw)
+    }
+
+    /** Try a few captive-portal URLs — gstatic is often flaky on RU cellular (T2). */
+    suspend fun urlTestResilient(proxyName: String): Long {
+        for (url in TEST_URLS) {
+            val ms = runCatching { urlTest(proxyName, url, timeoutMs = 9_000L) }.getOrDefault(-1L)
+            if (ms > 0L) return ms
+        }
+        return -1L
+    }
+
+    private fun parseDelayMs(raw: String): Long {
+        val trimmed = raw.trim()
+        if (trimmed.isEmpty() || trimmed.equals("timeout", true) || trimmed.equals("null", true)) {
+            return -1L
+        }
+        trimmed.toLongOrNull()?.let { return it }
+        return runCatching {
+            val o = JSONObject(trimmed)
+            when {
+                o.has("value") -> o.optLong("value", -1L)
+                o.has("delay") -> o.optLong("delay", -1L)
+                o.has("data") -> {
+                    when (val d = o.opt("data")) {
+                        is Number -> d.toLong()
+                        is String -> parseDelayMs(d)
+                        is JSONObject -> d.optLong("value", d.optLong("delay", -1L))
+                        else -> -1L
+                    }
+                }
+                else -> -1L
+            }
+        }.getOrDefault(-1L)
     }
 
     fun startTun(
@@ -118,9 +298,51 @@ object MihomoEngine {
     fun startListener() = runCatching { Core.startListener() }
     fun stopListener() = runCatching { Core.stopListener() }
 
+    fun updateDns(servers: List<String>) {
+        val cleaned = servers.map { it.trim() }.filter { it.isNotBlank() }.distinct()
+        if (cleaned.isEmpty()) return
+        runCatching {
+            Core.updateDns(JSONArray(cleaned).toString())
+        }.onFailure {
+            Log.w(TAG, "updateDns failed: ${it.message}")
+        }
+    }
+
+    fun resetConnections() {
+        runCatching { Core.resetConnections() }
+    }
+
+    /** Tell libclash VpnService is owning the tunnel (FlClash CoreState). */
+    fun setVpnState(enabled: Boolean = true) {
+        runCatching {
+            val state = JSONObject()
+                .put(
+                    "vpn-props",
+                    JSONObject()
+                        .put("enable", enabled)
+                        .put("system-proxy", false)
+                        .put("allow-bypass", false)
+                        .put("ipv6", false),
+                )
+                .put("only-statistics-proxy", false)
+                .put("current-profile-name", "PTRK-KVN")
+                .put("bypass-domain", JSONArray())
+            Core.setState(state.toString())
+        }.onFailure {
+            Log.w(TAG, "setVpnState failed: ${it.message}")
+        }
+    }
+
     fun traffic(): String = runCatching { Core.getTraffic() }.getOrDefault("{}")
     fun runTime(): String = runCatching { Core.getRunTime() }.getOrDefault("0")
     fun vpnOptionsJson(): String = runCatching { Core.getAndroidVpnOptions() }.getOrDefault("")
+
+    suspend fun nowSelected(groupName: String): String? {
+        return runCatching {
+            val root = JSONObject(getProxiesJson())
+            root.optJSONObject(groupName)?.optString("now")?.takeIf { it.isNotBlank() }
+        }.getOrNull()
+    }
 
     /** Leaf proxy names from getProxies payload (best-effort). */
     fun parseLeafProxyNames(proxiesJson: String): List<String> {
@@ -207,15 +429,30 @@ object MihomoEngine {
 
     suspend fun selectProxyPreferringGroups(proxyName: String): String {
         val groups = parseSelectorGroups(getProxiesJson())
-        val preferred = listOf("PROXY", "SELECT", "GLOBAL")
-        val group = preferred.firstNotNullOfOrNull { name ->
-            groups.firstOrNull { it.first.equals(name, true) && it.second.any { m -> m == proxyName } }
-        } ?: groups.firstOrNull { it.second.any { m -> m == proxyName } }
-        return if (group != null) {
-            changeProxy(group.first, proxyName)
+        val matching = groups.filter { (_, members) -> members.any { it == proxyName } }
+        var last = ""
+        if (matching.isEmpty()) {
+            last = changeProxy("GLOBAL", proxyName)
         } else {
-            changeProxy("GLOBAL", proxyName)
+            val preferredOrder = listOf("PROXY", "SELECT", "GLOBAL")
+            val ordered = matching.sortedBy { (name, _) ->
+                val idx = preferredOrder.indexOfFirst { it.equals(name, true) }
+                if (idx >= 0) idx else 100
+            }
+            for ((group, _) in ordered) {
+                last = changeProxy(group, proxyName)
+            }
+            // Point parent selectors (🚀 PTRK-KVN) at the subgroup that owns this leaf.
+            val leafGroupNames = matching.map { it.first }.toSet()
+            groups.forEach { (parent, members) ->
+                if (parent in leafGroupNames) return@forEach
+                val child = members.firstOrNull { it in leafGroupNames } ?: return@forEach
+                last = changeProxy(parent, child)
+            }
         }
+        // Always pin GLOBAL to the leaf for mode=global.
+        runCatching { changeProxy("GLOBAL", proxyName) }.onSuccess { last = it }
+        return last
     }
 
     private suspend fun invoke(method: String, data: String, timeoutMs: Long = 120_000L): String {

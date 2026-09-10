@@ -110,11 +110,51 @@ class AppUpdateService(
     }
 
     private suspend fun fetchRelease(client: HttpClient, channel: ReleaseChannel): GithubRelease {
-        val endpoint = when (channel) {
-            ReleaseChannel.Stable -> "https://api.github.com/repos/${mirror.ownerRepo}/releases/latest"
-            ReleaseChannel.Nightly -> "https://api.github.com/repos/${mirror.ownerRepo}/releases/tags/nightly"
+        return when (channel) {
+            ReleaseChannel.Stable -> fetchEndpoint(
+                client,
+                "https://api.github.com/repos/${mirror.ownerRepo}/releases/latest",
+            )
+            ReleaseChannel.Nightly -> fetchBetaRelease(client)
         }
+    }
 
+    private suspend fun fetchBetaRelease(client: HttpClient): GithubRelease {
+        // Prefer an explicit `beta` tag release; otherwise newest prerelease.
+        runCatching {
+            return fetchEndpoint(
+                client,
+                "https://api.github.com/repos/${mirror.ownerRepo}/releases/tags/beta",
+            )
+        }
+        val listUrl = "https://api.github.com/repos/${mirror.ownerRepo}/releases?per_page=20"
+        val hwid = deviceIdentityProvider.hwid()
+        val response = client.get(listUrl) {
+            headers {
+                append(HttpHeaders.Accept, "application/vnd.github+json")
+                append(HttpHeaders.UserAgent, CurrentAppInfo.userAgent)
+                append("x-hwid", hwid)
+            }
+        }
+        if (response.status.value !in 200..299) {
+            error("GitHub beta release request failed with HTTP ${response.status.value}")
+        }
+        val releases = json.decodeFromString(
+            kotlinx.serialization.builtins.ListSerializer(GithubReleaseListed.serializer()),
+            response.bodyAsText(),
+        )
+        val beta = releases.firstOrNull { it.prerelease && !it.draft }
+            ?: releases.firstOrNull { !it.draft }
+            ?: error("No beta releases found for ${mirror.ownerRepo}")
+        return GithubRelease(
+            tagName = beta.tagName,
+            htmlUrl = beta.htmlUrl,
+            publishedAt = beta.publishedAt,
+            assets = beta.assets,
+        )
+    }
+
+    private suspend fun fetchEndpoint(client: HttpClient, endpoint: String): GithubRelease {
         val hwid = deviceIdentityProvider.hwid()
         val response = client.get(endpoint) {
             headers {
@@ -183,11 +223,24 @@ class AppUpdateService(
             candidates: List<GithubReleaseAsset>,
             preferredExtensions: List<String>
         ): GithubReleaseAsset? {
-            return preferredExtensions
-                .firstNotNullOfOrNull { extension ->
-                    candidates.firstOrNull { it.name.lowercase().endsWith(extension) }
-                }
-                ?: candidates.firstOrNull()
+            fun score(asset: GithubReleaseAsset): Long {
+                val version = asset.name.versionToken()
+                    ?.split('.', '-', '_')
+                    ?.mapNotNull { it.toLongOrNull() }
+                    .orEmpty()
+                // Prefer higher semver; fall back to updated timestamp.
+                val versionScore = version.getOrNull(0)?.times(1_000_000L)?.plus(
+                    (version.getOrNull(1) ?: 0L) * 1_000L + (version.getOrNull(2) ?: 0L)
+                ) ?: 0L
+                return versionScore
+            }
+
+            val byExt = preferredExtensions.flatMap { extension ->
+                candidates.filter { it.name.lowercase().endsWith(extension) }
+            }.ifEmpty { candidates }
+
+            return byExt.maxWithOrNull(compareBy<GithubReleaseAsset> { score(it) }
+                .thenBy { it.updatedAt.orEmpty() })
         }
 
         fun isUpdateAvailable(
@@ -196,7 +249,7 @@ class AppUpdateService(
             currentVersion: String
         ): Boolean {
             val release = releaseTag.removePrefix("v")
-            if (channel == ReleaseChannel.Nightly && release == "nightly") return true
+            if (channel == ReleaseChannel.Nightly && (release == "nightly" || release == "beta")) return true
 
             return compareVersions(release, currentVersion) > 0
         }
@@ -291,6 +344,19 @@ data class GithubRelease(
     val htmlUrl: String,
     @SerialName("published_at")
     val publishedAt: String? = null,
+    val assets: List<GithubReleaseAsset> = emptyList()
+)
+
+@Serializable
+private data class GithubReleaseListed(
+    @SerialName("tag_name")
+    val tagName: String,
+    @SerialName("html_url")
+    val htmlUrl: String,
+    @SerialName("published_at")
+    val publishedAt: String? = null,
+    val draft: Boolean = false,
+    val prerelease: Boolean = false,
     val assets: List<GithubReleaseAsset> = emptyList()
 )
 

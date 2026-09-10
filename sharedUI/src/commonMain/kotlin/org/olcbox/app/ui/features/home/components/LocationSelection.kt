@@ -25,6 +25,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -182,23 +184,8 @@ fun LocationSelectorScreen(
                 }
             }
 
-            FilledTonalButton(
-                onClick = onAddLocationClick,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(54.dp),
-                shape = RoundedCornerShape(16.dp)
-            ) {
-                Icon(Icons.Rounded.Add, contentDescription = null)
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    text = org.olcbox.app.i18n.S.addCustomLocation,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Medium
-                )
-            }
-
-            if (subscriptionLocations.isEmpty()) {
+            // Bottom "add server" removed — use the top-right "+" (same AddConfigurationSheet).
+            if (subscriptionLocations.isEmpty() && customLocations.isEmpty()) {
                 FilledTonalButton(
                     onClick = onAddSubscriptionClick,
                     modifier = Modifier
@@ -206,10 +193,8 @@ fun LocationSelectorScreen(
                         .height(54.dp),
                     shape = RoundedCornerShape(16.dp)
                 ) {
-                    Icon(Icons.Rounded.Add, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
                     Text(
-                        text = "Add subscription",
+                        text = org.olcbox.app.i18n.S.addConnection,
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Medium
                     )
@@ -224,12 +209,15 @@ private fun RelaySetupCard(
     onAddSubscriptionClick: () -> Unit,
     onAddLocationClick: () -> Unit
 ) {
+    val language by org.olcbox.app.i18n.AppLocale.language.collectAsState()
+    @Suppress("UNUSED_EXPRESSION")
+    language
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         Text(
-            text = "Add relay setup",
+            text = org.olcbox.app.i18n.S.addRelaySetup,
             style = MaterialTheme.typography.titleSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             fontWeight = FontWeight.SemiBold,
@@ -237,16 +225,16 @@ private fun RelaySetupCard(
         )
 
         SetupActionRow(
-            title = "Add subscription",
-            subtitle = "Scan QR, paste URI, or import file",
+            title = org.olcbox.app.i18n.S.addSubscription,
+            subtitle = org.olcbox.app.i18n.S.addSubscriptionHint,
             icon = Icons.Outlined.QrCodeScanner,
             prominent = true,
             onClick = onAddSubscriptionClick
         )
 
         SetupActionRow(
-            title = "Create custom location",
-            subtitle = "Enter room, key, provider, and transport",
+            title = org.olcbox.app.i18n.S.createCustomLocation,
+            subtitle = org.olcbox.app.i18n.S.createCustomLocationHint,
             icon = Icons.Outlined.Add,
             onClick = onAddLocationClick
         )
@@ -407,6 +395,7 @@ private fun LocationSelectorRow(
         isLoading = isLoading,
         isError = isOffline,
         pingMs = pingMs,
+        settingsEnabled = location.config?.isMihomo() != true,
         onSettingsClick = {
             onLocationSettingsClick(location.storageId)
         },
@@ -480,7 +469,6 @@ private fun LocationItem.subscriptionDetails(): String? {
 
     return listOfNotNull(
         quotaText(subscription.used, subscription.available).takeUnless { hasProgressQuota },
-        subscription.refresh?.takeIf { it.isNotBlank() }?.let { "${org.olcbox.app.i18n.S.refreshPrefix} $it" }
     ).joinToString(" · ").takeIf { it.isNotBlank() }
 }
 
@@ -490,10 +478,15 @@ private fun LocationItem.subscriptionDescription(): String? {
 }
 
 private fun quotaText(used: String?, available: String?): String? {
+    val usedRaw = used?.trim()?.takeIf { it.isNotBlank() }
+    val availRaw = available?.trim()?.takeIf { it.isNotBlank() }
     return when {
-        !used.isNullOrBlank() && !available.isNullOrBlank() -> "$used used · $available available"
-        !used.isNullOrBlank() -> "$used used"
-        !available.isNullOrBlank() -> "$available available"
+        usedRaw != null && availRaw != null ->
+            org.olcbox.app.i18n.S.trafficSummary(usedRaw, availRaw)
+        usedRaw != null ->
+            "${org.olcbox.app.i18n.S.localizeDataUnit(usedRaw)} ${org.olcbox.app.i18n.S.used}"
+        availRaw != null ->
+            org.olcbox.app.i18n.S.trafficRemainingLabel(availRaw)
         else -> null
     }
 }

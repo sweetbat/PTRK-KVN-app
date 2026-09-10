@@ -21,6 +21,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.launch
 import org.olcbox.app.data.share.ConfigShareService
+import org.olcbox.app.i18n.S
 import org.olcbox.app.update.AndroidUpdateSettingsStore
 import org.olcbox.app.update.AppUpdateInfo
 import org.olcbox.app.update.AppUpdateSettings
@@ -165,17 +166,22 @@ fun AndroidMainScreen(
     fun showUpdateResult(info: AppUpdateInfo) {
         if (info.isUpdateAvailable) {
             updateOffer = info
-            updateStatusText = "${info.channel.name} update available: ${info.version}"
+            val channelLabel = if (info.channel == org.olcbox.app.update.ReleaseChannel.Nightly) {
+                S.channelBeta
+            } else {
+                S.channelStable
+            }
+            updateStatusText = "$channelLabel: ${info.version}"
         } else {
             updateOffer = null
-            updateStatusText = "PTRK-KVN is up to date"
+            updateStatusText = S.upToDate
         }
     }
 
     fun checkUpdate(manual: Boolean) {
         val service = appUpdateService
         if (service == null) {
-            updateStatusText = "Update service unavailable"
+            updateStatusText = S.updateServiceUnavailable
             return
         }
         scope.launch {
@@ -183,7 +189,8 @@ fun AndroidMainScreen(
             val checkStartedAt = kotlin.time.Clock.System.now().toEpochMilliseconds()
             if (!manual && !previousSettings.isUpdateCheckDue(checkStartedAt)) return@launch
 
-            updateStatusText = "Checking ${previousSettings.channel.name.lowercase()}..."
+            val channelLabel = if (previousSettings.seeksBeta) S.channelBeta else S.channelStable
+            updateStatusText = S.checkingChannel(channelLabel)
             val result = service.check(
                 previousSettings.channel,
                 vpnManager.subscriptionFetchProxy()
@@ -264,7 +271,15 @@ fun AndroidMainScreen(
 
     LaunchedEffect(Unit) {
         org.olcbox.app.i18n.AppLanguageStore.restoreIntoLocale(context)
-        needsLanguagePicker = !org.olcbox.app.i18n.AppLanguageStore.isLanguageChosen(context)
+        val chosen = org.olcbox.app.i18n.AppLanguageStore.isLanguageChosen(context)
+        needsLanguagePicker = !chosen
+        if (!chosen) {
+            // Prefill picker from system locale so RU devices start on Russian.
+            val system = java.util.Locale.getDefault().language
+            org.olcbox.app.i18n.AppLanguage.fromCode(system)?.let {
+                org.olcbox.app.i18n.AppLocale.set(it)
+            }
+        }
     }
 
     fun reloadLocationsAfterImport(onComplete: () -> Unit = {}) {
@@ -346,6 +361,7 @@ fun AndroidMainScreen(
         navigateHomeFromLocationSettings()
     }
 
+    if (!needsLanguagePicker) {
     OlcboxAppContent(
         homeViewModel = viewModel,
         locationViewModel = locationViewModel,
@@ -396,12 +412,13 @@ fun AndroidMainScreen(
             vpnManager.refreshInstalledApps()
             isAppSettingsOpen = true
         },
-        onSplitTunnelingClick = {
+            onSplitTunnelingClick = {
             appSettingsInitialRoute = AppSettingsInitialRoute.SplitTunneling
             vpnManager.refreshInstalledApps()
             isAppSettingsOpen = true
         }
     )
+    }
 
     shareSheetPayload?.let { (title, payload) ->
         AndroidConfigShareSheet(
@@ -482,6 +499,17 @@ fun AndroidMainScreen(
             onCheckUpdatesClick = {
                 checkUpdate(manual = true)
             },
+            onBetaChannelChanged = { seekBeta ->
+                scope.launch {
+                    val channel = if (seekBeta) {
+                        org.olcbox.app.update.ReleaseChannel.Nightly
+                    } else {
+                        org.olcbox.app.update.ReleaseChannel.Stable
+                    }
+                    saveUpdateSettings(updateSettings.copy(channel = channel))
+                    checkUpdate(manual = true)
+                }
+            },
             onSubscriptionShareClick = { url ->
                 shareSheetPayload = "Subscription QR" to ConfigShareService.subscriptionQrText(url)
             },
@@ -526,6 +554,10 @@ fun AndroidMainScreen(
                 }
             },
             onDynamicThemeChanged = vpnManager::setDynamicThemeEnabled,
+            mihomoMode = homeState.mihomoMode,
+            onMihomoModeSelected = { mode ->
+                viewModel.setMihomoMode(mode)
+            },
             onModeSelected = { mode ->
                 if (mode != connectionMode && homeState.isVpnConnected) {
                     val prepIntent = if (mode == AndroidConnectionMode.Tun) {
