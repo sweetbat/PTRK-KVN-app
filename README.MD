@@ -1,51 +1,74 @@
 # PTRK-KVN
 
-Android VPN client with dual engines: **Mihomo** (Clash Meta / Remnawave YAML) and **olcRTC**.
+[![English](https://img.shields.io/badge/lang-English-blue)](README.md)
+[![Русский](https://img.shields.io/badge/lang-Русский-red)](README.ru.md)
+[![Release](https://img.shields.io/github/v/release/sweetbat/PTRK-KVN-app?include_prereleases)](https://github.com/sweetbat/PTRK-KVN-app/releases)
+[![Telegram channel](https://img.shields.io/badge/Telegram-channel-26A5E4?logo=telegram)](https://t.me/ptrkkvn)
+[![Telegram bot](https://img.shields.io/badge/Telegram-bot-26A5E4?logo=telegram)](https://t.me/ptrkkvnbot)
 
-Package id: `ptrkkvn.app`  
-Updates: [GitHub Releases](https://github.com/sweetbat/PTRK-KVN-app/releases)
+**The dual-engine Android VPN client:** **Mihomo** + **olcRTC** in one app.
+
+Paste a Remnawave subscription URL — the client imports Clash/Mihomo YAML **and** automatically adds the paired olcRTC subscription. Run modern proxy stacks (gRPC, Hysteria2, xHTTP) on Mihomo and an olcRTC node without juggling two apps.
+
+> **Compatibility note:** Fully tested and confirmed working **100%** with the **PTRK-KVN** VPN service (also known as Patrick KVN / PTRK KVN). Other Remnawave panels may work, but PTRK-KVN is the reference setup we vouch for.
+
+<p align="center">
+  <img src="docs/screenshots/home.png" alt="PTRK-KVN home screen" width="280" />
+  &nbsp;
+  <img src="docs/screenshots/servers.png" alt="PTRK-KVN server list" width="280" />
+</p>
+
+## Links
+
+| | |
+| --- | --- |
+| **APK / source** | [GitHub Releases](https://github.com/sweetbat/PTRK-KVN-app/releases) |
+| **News channel** | [t.me/ptrkkvn](https://t.me/ptrkkvn) |
+| **Subscription bot** | [t.me/ptrkkvnbot](https://t.me/ptrkkvnbot) |
+
+## Why dual-core?
+
+Most clients pick **either** Clash Meta **or** an RTC/WebRTC-style stack. PTRK-KVN runs **both**:
+
+| Engine | Role |
+| --- | --- |
+| **Mihomo** (Clash Meta) | Remnawave / Clash YAML — gRPC, Hysteria2, xHTTP, and other leaf protocols |
+| **olcRTC** | Isolated `:olcrtc` process (Mobile SOCKS → `hev-socks5-tunnel`) so `libclash` and `libgojni` never share one Go runtime |
+
+## How it works for you
+
+1. Import your main Remnawave subscription URL (e.g. PTRK-KVN mug link).
+2. The app loads Mihomo nodes from YAML.
+3. It **automatically** pulls the companion olcRTC subscription when the URL matches the PTRK companion pattern.
+4. Pick a Mihomo or olcRTC server and connect — one UI, two engines.
 
 ## Features
 
-- Mihomo TUN via `libclash` / `libcore` (subscription YAML import, rule / global / direct modes)
-- olcRTC path via Mobile SOCKS + `hev-socks5-tunnel` + Android `VpnService`
-- Russian / English UI with first-launch language picker
-- Subscription import, ping, traffic quota, split tunneling, SOCKS5 proxy mode
-- In-app update checks against this repository
+- Dual engine: Mihomo TUN path + olcRTC hev tunnel
+- RU / EN UI (first-launch language picker)
+- Ping, traffic quota, subscription refresh
+- Mihomo routing (Минцифры whitelist on/off); torrents always direct
+- Split tunneling, SOCKS5 proxy mode
+- In-app updates from this repository
 
 ## Status
 
-Active development. Android arm64 is the primary target.
+Android **arm64** is the primary target. Latest stable: [Releases](https://github.com/sweetbat/PTRK-KVN-app/releases).
 
 ## Build (Android)
 
-Requirements:
-
-- JDK 17+
-- Android SDK + NDK
-- Gradle wrapper in this repo
+Requirements: JDK 17+, Android SDK + NDK, Gradle wrapper in this repo.
 
 ```bash
 ./gradlew :androidApp:assembleDebug
 ```
 
-APK output:
-
 ```text
 androidApp/build/outputs/apk/debug/androidApp-debug.apk
 ```
 
-Native Mihomo libs are under `androidApp/src/main/jniLibs/`.  
-Bundled olcRTC AAR is under `sharedUI/olcrtc-bin/libs/`.
-
-## Engines
-
-| Engine | Config | Tunnel |
-| --- | --- | --- |
-| Mihomo | Clash / Remnawave YAML subscription | libclash TUN |
-| olcRTC | `olcrtc://` / JSON locations | Mobile SOCKS → hev-socks5-tunnel |
-
-olcRTC ping runs in a separate `:olcrtc` process so Go runtimes (`libclash` and `libgojni`) do not share one address space.
+Native Mihomo libs: `androidApp/src/main/jniLibs/`  
+Bundled olcRTC AAR: `sharedUI/olcrtc-bin/libs/`
 
 ## Credits
 
