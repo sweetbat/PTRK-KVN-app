@@ -1,7 +1,7 @@
 # PTRK-KVN
 
-[![English](https://img.shields.io/badge/lang-English-blue)](README.md)
-[![Русский](https://img.shields.io/badge/lang-Русский-red)](README.ru.md)
+[![English](https://img.shields.io/badge/lang-English-blue)](README.MD)
+[![Русский](https://img.shields.io/badge/lang-%D0%A0%D1%83%D1%81%D1%81%D0%BA%D0%B8%D0%B9-red)](README.ru.md)
 [![Release](https://img.shields.io/github/v/release/sweetbat/PTRK-KVN-app?include_prereleases)](https://github.com/sweetbat/PTRK-KVN-app/releases)
 [![Telegram-канал](https://img.shields.io/badge/Telegram-канал-26A5E4?logo=telegram)](https://t.me/ptrkkvn)
 [![Telegram-бот](https://img.shields.io/badge/Telegram-бот-26A5E4?logo=telegram)](https://t.me/ptrkkvnbot)
