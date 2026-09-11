@@ -7,7 +7,8 @@ data class TrafficQuota(
     val availableBytes: Double,
     val totalBytes: Double,
     val usedLabel: String,
-    val availableLabel: String
+    val availableLabel: String,
+    val totalLabel: String,
 ) {
     val remainingFraction: Float
         get() = (availableBytes / totalBytes).toFloat().coerceIn(0f, 1f)
@@ -24,6 +25,8 @@ fun parseTrafficQuota(used: String?, available: String?): TrafficQuota? {
 
     val total = when {
         totalFromUsed != null && totalFromUsed > 0.0 -> totalFromUsed
+        // subscription-userinfo: available header is often the plan total, not remaining.
+        parsedUsed != null && parsedAvailable != null && parsedAvailable >= parsedUsed -> parsedAvailable
         parsedUsed != null && parsedAvailable != null -> parsedUsed + parsedAvailable
         else -> return null
     }
@@ -31,8 +34,7 @@ fun parseTrafficQuota(used: String?, available: String?): TrafficQuota? {
 
     val resolvedUsed = (parsedUsed ?: (total - (parsedAvailable ?: return null)))
         .coerceIn(0.0, total)
-    val resolvedAvailable = (parsedAvailable ?: (total - resolvedUsed))
-        .coerceIn(0.0, total)
+    val resolvedAvailable = (total - resolvedUsed).coerceIn(0.0, total)
 
     return TrafficQuota(
         usedBytes = resolvedUsed,
@@ -41,10 +43,14 @@ fun parseTrafficQuota(used: String?, available: String?): TrafficQuota? {
         usedLabel = usedParts.firstOrNull()
             ?.takeIf { it.isNotBlank() }
             ?: formatTrafficBytes(resolvedUsed),
-        availableLabel = available
-            ?.trim()
-            ?.takeIf { it.isNotBlank() }
-            ?: formatTrafficBytes(resolvedAvailable)
+        availableLabel = formatTrafficBytes(resolvedAvailable),
+        totalLabel = when {
+            totalFromUsed != null -> usedParts.getOrNull(1)?.takeIf { it.isNotBlank() }
+                ?: formatTrafficBytes(total)
+            parsedAvailable != null && parsedAvailable >= (parsedUsed ?: 0.0) ->
+                available?.trim()?.takeIf { it.isNotBlank() } ?: formatTrafficBytes(total)
+            else -> formatTrafficBytes(total)
+        },
     )
 }
 

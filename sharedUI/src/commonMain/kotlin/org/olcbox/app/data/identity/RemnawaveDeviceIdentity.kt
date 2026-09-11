@@ -5,9 +5,10 @@ import org.olcbox.app.CurrentAppInfo
 /**
  * Identity Remnawave / panel / Telegram bot show for this install.
  *
- * - User-Agent: always `PTRK-KVN-app/<appVersion>` (HWID table).
- * - x-device-model: real phone model (panel appends OS in parentheses from x-ver-os).
- * - Clash YAML body still needs a ClashMeta-compatible request; that must not overwrite HWID.
+ * - User-Agent: `PTRK-KVN-app/<appVersion>` (External Squad + HWID table).
+ * - Subscription download prefers that UA with `?flag=meta` and `x-hwid` so the
+ *   panel does not return the "Приложение не поддерживается" stub.
+ * - x-device-model: real phone model (panel may append OS from x-ver-os).
  */
 object RemnawaveDeviceIdentity {
     const val APP_NAME = "PTRK-KVN-app"

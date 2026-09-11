@@ -67,16 +67,16 @@ internal actual suspend fun downloadSubscriptionBodyDirect(
         allowInsecureRequests = allowInsecureRequests,
     )
     return try {
-        val agents = listOf("ClashMeta/1.19.0", "clash.meta/v1.19.0", "mihomo/1.19.0", "Clash")
+        val agents = listOf(
+            org.olcbox.app.data.identity.RemnawaveDeviceIdentity.userAgent(),
+            "ClashMeta/1.19.0",
+            "clash.meta/v1.19.0",
+            "mihomo/1.19.0",
+            "Clash",
+        )
         val joiner = if ('?' in url) "&" else "?"
-        val urls = listOf(url, "$url${joiner}flag=clash", "$url${joiner}flag=meta").distinct()
-        fun usable(text: String): Boolean {
-            val lower = text.lowercase()
-            return lower.contains("proxies:") ||
-                lower.contains("proxy-groups:") ||
-                lower.contains("mixed-port:") ||
-                text.contains("olcrtc://", ignoreCase = true)
-        }
+        val urls = listOf("$url${joiner}flag=meta", "$url${joiner}flag=clash", url).distinct()
+        fun usable(text: String): Boolean = isUsableSubscriptionBody(text)
         for (candidate in urls) {
             for (agent in agents) {
                 val body = runCatching {
@@ -97,7 +97,11 @@ internal actual suspend fun downloadSubscriptionBodyDirect(
                 headers {
                     append(io.ktor.http.HttpHeaders.Accept, "text/yaml, */*")
                     remove(io.ktor.http.HttpHeaders.UserAgent)
-                    append(io.ktor.http.HttpHeaders.UserAgent, "ClashMeta/1.19.0")
+                    append(
+                        io.ktor.http.HttpHeaders.UserAgent,
+                        org.olcbox.app.data.identity.RemnawaveDeviceIdentity.userAgent(),
+                    )
+                    if (!hwid.isNullOrBlank()) append("x-hwid", hwid)
                 }
             }.bodyAsText()
         )

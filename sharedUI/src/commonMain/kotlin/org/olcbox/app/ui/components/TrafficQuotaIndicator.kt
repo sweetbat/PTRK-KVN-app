@@ -2,7 +2,6 @@ package org.olcbox.app.ui.components
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.material3.LinearProgressIndicator
@@ -14,7 +13,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.olcbox.app.data.model.parseTrafficQuota
@@ -27,33 +25,23 @@ fun TrafficQuotaIndicator(
     compact: Boolean = false
 ) {
     val quota = remember(used, available) { parseTrafficQuota(used, available) } ?: return
+    val summary = org.olcbox.app.i18n.S.trafficUsedOfTotal(
+        org.olcbox.app.i18n.S.localizeDataUnit(quota.usedLabel),
+        org.olcbox.app.i18n.S.localizeDataUnit(quota.totalLabel),
+    )
 
     Column(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(if (compact) 3.dp else 5.dp)
     ) {
-        Row(
+        Text(
+            text = summary,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = if (compact) 11.sp else 12.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text(
-                text = "${org.olcbox.app.i18n.S.localizeDataUnit(quota.availableLabel)} ${org.olcbox.app.i18n.S.remaining}",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontSize = if (compact) 11.sp else 12.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f)
-            )
-            Text(
-                text = "${org.olcbox.app.i18n.S.localizeDataUnit(quota.usedLabel)} ${org.olcbox.app.i18n.S.used}",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontSize = if (compact) 11.sp else 12.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                textAlign = TextAlign.End,
-                modifier = Modifier.weight(1f)
-            )
-        }
+        )
 
         val usedFraction = (quota.usedBytes / quota.totalBytes)
             .toFloat()

@@ -7,27 +7,30 @@ import kotlin.test.assertNull
 
 class TrafficQuotaTest {
     @Test
-    fun parsesUsedTotalAndExplicitAvailable() {
-        val quota = assertNotNull(parseTrafficQuota("500mb/10gb", "9.5gb"))
+    fun parsesUsedTotalSlashForm() {
+        val quota = assertNotNull(parseTrafficQuota("500mb/10gb", null))
 
         assertEquals("500mb", quota.usedLabel)
-        assertEquals("9.5gb", quota.availableLabel)
+        assertEquals("10gb", quota.totalLabel)
         assertEquals(0.95f, quota.remainingFraction, absoluteTolerance = 0.001f)
+    }
+
+    @Test
+    fun treatsSeparateAvailableAsPlanTotal() {
+        // Remnawave subscription-userinfo: available is plan total, not remaining.
+        val quota = assertNotNull(parseTrafficQuota("2.8MB", "10.0GB"))
+
+        assertEquals("2.8MB", quota.usedLabel)
+        assertEquals("10.0GB", quota.totalLabel)
+        assertEquals(2.8 / (10.0 * 1024), quota.usedBytes / quota.totalBytes, absoluteTolerance = 0.0001)
     }
 
     @Test
     fun derivesAvailableFromUsedAndTotal() {
         val quota = assertNotNull(parseTrafficQuota("2 GB / 8 GB", null))
 
-        assertEquals("6 GB", quota.availableLabel)
         assertEquals(0.75f, quota.remainingFraction, absoluteTolerance = 0.001f)
-    }
-
-    @Test
-    fun derivesTotalFromSeparateUsedAndAvailable() {
-        val quota = assertNotNull(parseTrafficQuota("1gb", "3gb"))
-
-        assertEquals(0.75f, quota.remainingFraction, absoluteTolerance = 0.001f)
+        assertEquals("8 GB", quota.totalLabel)
     }
 
     @Test

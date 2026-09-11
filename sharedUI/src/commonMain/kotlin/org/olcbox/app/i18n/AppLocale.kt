@@ -227,6 +227,9 @@ object S {
             .replace(Regex("""(?i)(\d+)\s*d\b"""), "$1\u0434")
     }
 
+    fun trafficUsedOfTotal(used: String, total: String): String =
+        if (ru) "$used \u0438\u0437 $total" else "$used of $total"
+
     fun trafficRemainingLabel(available: String): String {
         if (isUnlimitedTraffic(available)) {
             return if (ru) "\u221e \u043e\u0441\u0442\u0430\u043b\u043e\u0441\u044c" else "∞ remaining"

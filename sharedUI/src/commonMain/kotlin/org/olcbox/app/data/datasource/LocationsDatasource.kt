@@ -879,14 +879,14 @@ class LocationsRepositoryImpl(
         initial: String,
         hwid: String?,
     ): String {
-        fun usable(text: String): Boolean =
-            ClashYaml.looksLikeClash(text) || text.contains("olcrtc://", ignoreCase = true)
+        fun usable(text: String): Boolean = isUsableSubscriptionBody(text)
 
         val identity = org.olcbox.app.data.identity.RemnawaveDeviceIdentity
         val deviceModel = identity.deviceModel()
         val osVersion = identity.osVersion()
         val appAgent = identity.userAgent()
         val yamlAgents = listOf(
+            appAgent,
             "ClashMeta/1.19.0",
             "clash.meta/v1.19.0",
             "mihomo/1.19.0",
@@ -916,21 +916,31 @@ class LocationsRepositoryImpl(
             }.getOrNull()
 
         var yaml = initial.takeIf(::usable)
+        var usedAgent: String? = if (yaml != null) appAgent else null
         if (yaml == null) {
-            for (candidateUrl in urlVariants) {
+            outer@ for (candidateUrl in urlVariants) {
                 for (agent in yamlAgents) {
-                    val body = getBody(candidateUrl, agent, includeHwid = false) ?: continue
-                    if (usable(body)) {
+                    val withHwid = !hwid.isNullOrBlank()
+                    val body = getBody(candidateUrl, agent, includeHwid = withHwid)
+                    if (body != null && usable(body)) {
                         yaml = body
-                        break
+                        usedAgent = agent
+                        break@outer
+                    }
+                    if (withHwid && agent != appAgent) {
+                        val fallback = getBody(candidateUrl, agent, includeHwid = false)
+                        if (fallback != null && usable(fallback)) {
+                            yaml = fallback
+                            usedAgent = agent
+                            break@outer
+                        }
                     }
                 }
-                if (yaml != null) break
             }
         }
 
-        // Touch with PTRK User-Agent so Remnawave HWID shows PTRK-KVN-app/<ver> + phone model.
-        if (!hwid.isNullOrBlank()) {
+        // Refresh HWID table as PTRK when YAML came from a Clash-compatible UA.
+        if (!hwid.isNullOrBlank() && usedAgent != null && usedAgent != appAgent) {
             getBody(urlVariants.first(), appAgent, includeHwid = true)
         }
 

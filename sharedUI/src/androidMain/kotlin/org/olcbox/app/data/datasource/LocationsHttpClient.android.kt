@@ -76,13 +76,7 @@ internal actual suspend fun downloadSubscriptionBodyDirect(
         pinSubscriptionHeaders = true,
     )
     try {
-        fun usable(text: String): Boolean {
-            val lower = text.lowercase()
-            return lower.contains("proxies:") ||
-                lower.contains("proxy-groups:") ||
-                lower.contains("mixed-port:") ||
-                text.contains("olcrtc://", ignoreCase = true)
-        }
+        fun usable(text: String): Boolean = isUsableSubscriptionBody(text)
 
         val appAgent = RemnawaveDeviceIdentity.userAgent()
         val deviceModel = RemnawaveDeviceIdentity.deviceModel()
@@ -110,7 +104,8 @@ internal actual suspend fun downloadSubscriptionBodyDirect(
                 android.util.Log.i(
                     "SubDownload",
                     "ua=$agent model=$deviceModel os=$osVersion hwid=${includeHwid && !hwid.isNullOrBlank()} " +
-                        "code=${resp.code} len=${body.length} clash=${usable(body)}"
+                        "code=${resp.code} len=${body.length} clash=${usable(body)} " +
+                        "rejected=${isRemnawaveClientRejectedBody(body)}"
                 )
                 return DirectSubscriptionDownload(
                     content = body,
@@ -126,13 +121,11 @@ internal actual suspend fun downloadSubscriptionBodyDirect(
             }
         }
 
-        // Remnawave picks body format from User-Agent:
-        //   PTRK-KVN-app/* → base64 URI dump
-        //   ClashMeta/mihomo → Clash YAML
-        // HWID table shows the last request's UA + x-device-model, so:
-        //   1) pull YAML with ClashMeta (no HWID)
-        //   2) touch with PTRK UA + real model + HWID to register identity
+        // Remnawave External Squad keys off User-Agent. Prefer PTRK-KVN-app + HWID
+        // with ?flag=meta so we get Clash YAML (plain PTRK UA often returns URI dump).
+        // ClashMeta without allowlisting returns a stub proxy "Приложение не поддерживается".
         val yamlAgents = listOf(
+            appAgent,
             "ClashMeta/1.19.0",
             "clash.meta/v1.19.0",
             "mihomo/1.19.0",
@@ -146,31 +139,48 @@ internal actual suspend fun downloadSubscriptionBodyDirect(
             url,
         ).distinct()
 
-        fun firstYaml(): DirectSubscriptionDownload? {
+        fun firstYaml(): Pair<DirectSubscriptionDownload, String>? {
             for (candidate in urls) {
                 for (agent in yamlAgents) {
+                    val withHwid = !hwid.isNullOrBlank()
                     val downloaded = runCatching {
-                        fetch(candidate, agent, includeHwid = false)
+                        fetch(candidate, agent, includeHwid = withHwid)
                     }.getOrNull()
-                    if (downloaded != null && usable(downloaded.content)) return downloaded
+                    if (downloaded != null && usable(downloaded.content)) {
+                        return downloaded to agent
+                    }
+                    // Retry without HWID only for Clash-like agents (legacy panels).
+                    if (withHwid && agent != appAgent) {
+                        val fallback = runCatching {
+                            fetch(candidate, agent, includeHwid = false)
+                        }.getOrNull()
+                        if (fallback != null && usable(fallback.content)) {
+                            return fallback to agent
+                        }
+                    }
                 }
             }
             return null
         }
 
-        val yaml = firstYaml()
-            ?: runCatching { fetch(urls.first(), "ClashMeta/1.19.0", includeHwid = false) }.getOrNull()
-            ?: runCatching { fetch(urls.first(), appAgent, includeHwid = false) }.getOrNull()
+        val resolved = firstYaml()
+            ?: runCatching {
+                fetch(urls.first(), appAgent, includeHwid = !hwid.isNullOrBlank())
+            }.getOrNull()?.let { it to appAgent }
+            ?: runCatching {
+                fetch(urls.first(), "ClashMeta/1.19.0", includeHwid = !hwid.isNullOrBlank())
+            }.getOrNull()?.let { it to "ClashMeta/1.19.0" }
             ?: error("Subscription server returned an empty response")
 
-        if (!hwid.isNullOrBlank()) {
-            // Register / refresh HWID row with the required PTRK User-Agent + phone model.
+        val (yaml, usedAgent) = resolved
+
+        // If YAML came via ClashMeta, refresh HWID row with PTRK UA for the panel table.
+        if (!hwid.isNullOrBlank() && usedAgent != appAgent) {
             runCatching {
                 fetch(urls.first(), appAgent, includeHwid = true)
             }
         }
 
-        // Prefer metadata from YAML response (same Remnawave headers either way).
         yaml
     } finally {
         client.dispatcher.executorService.shutdown()
