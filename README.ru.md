@@ -13,9 +13,11 @@
 > **Важно про совместимость:** отлично работает и **на 100% проверено** на VPN-сервисе **PTRK-KVN** (Patrick KVN / PTRK KVN). Другие панели Remnawave могут подойти, но эталон и гарантия — именно PTRK-KVN.
 
 <p align="center">
-  <img src="docs/screenshots/home.png" alt="Главный экран PTRK-KVN" width="280" />
+  <img src="docs/screenshots/home.png" alt="Главный экран PTRK-KVN" width="220" />
   &nbsp;
-  <img src="docs/screenshots/servers.png" alt="Список серверов PTRK-KVN" width="280" />
+  <img src="docs/screenshots/servers.png" alt="Список серверов PTRK-KVN" width="220" />
+  &nbsp;
+  <img src="docs/screenshots/olcrtc.png" alt="olcRTC и обход PTRK-KVN" width="220" />
 </p>
 
 ## Ссылки

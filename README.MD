@@ -13,9 +13,11 @@ Paste a Remnawave subscription URL — the client imports Clash/Mihomo YAML **an
 > **Compatibility note:** Fully tested and confirmed working **100%** with the **PTRK-KVN** VPN service (also known as Patrick KVN / PTRK KVN). Other Remnawave panels may work, but PTRK-KVN is the reference setup we vouch for.
 
 <p align="center">
-  <img src="docs/screenshots/home.png" alt="PTRK-KVN home screen" width="280" />
+  <img src="docs/screenshots/home.png" alt="PTRK-KVN home screen" width="220" />
   &nbsp;
-  <img src="docs/screenshots/servers.png" alt="PTRK-KVN server list" width="280" />
+  <img src="docs/screenshots/servers.png" alt="PTRK-KVN server list" width="220" />
+  &nbsp;
+  <img src="docs/screenshots/olcrtc.png" alt="PTRK-KVN olcRTC and bypass nodes" width="220" />
 </p>
 
 ## Links
