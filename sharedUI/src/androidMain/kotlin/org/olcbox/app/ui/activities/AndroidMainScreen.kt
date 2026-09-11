@@ -45,7 +45,9 @@ fun AndroidMainScreen(
     viewModel: HomeScreenViewModel,
     locationViewModel: LocationViewModel,
     vpnManager: AndroidVpnManager,
-    appUpdateService: AppUpdateService? = null
+    appUpdateService: AppUpdateService? = null,
+    pendingImportUrl: String? = null,
+    onPendingImportConsumed: () -> Unit = {},
 ) {
 
     var currentScreenRoute by rememberSaveable { mutableStateOf("home") }
@@ -282,6 +284,24 @@ fun AndroidMainScreen(
                 org.olcbox.app.i18n.AppLocale.set(it)
             }
         }
+    }
+
+    LaunchedEffect(pendingImportUrl) {
+        val url = pendingImportUrl?.trim()?.takeIf { it.isNotBlank() } ?: return@LaunchedEffect
+        onPendingImportConsumed()
+        viewModel.onImportFullConfig(
+            rawText = url,
+            onComplete = {
+                locationViewModel.loadLocations {
+                    viewModel.loadCurrentConfig {
+                        Toast.makeText(context, S.configurationImported, Toast.LENGTH_SHORT).show()
+                    }
+                }
+            },
+            onError = { message ->
+                Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+            },
+        )
     }
 
     fun reloadLocationsAfterImport(onComplete: () -> Unit = {}) {

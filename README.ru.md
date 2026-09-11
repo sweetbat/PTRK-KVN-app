@@ -12,6 +12,22 @@
 
 > **Важно про совместимость:** отлично работает и **на 100% проверено** на VPN-сервисе **PTRK-KVN** (Patrick KVN / PTRK KVN). Другие панели Remnawave могут подойти, но эталон и гарантия — именно PTRK-KVN.
 
+### Открытие со страницы подписки Remnawave
+
+В карточке приложения на subscription page укажи:
+
+```text
+urlScheme: ptrkkvn://add/
+```
+
+Пример deep link (как у Happ — scheme + URL подписки):
+
+```text
+ptrkkvn://add/https://drink.ptrkkvn.beer/mug/ТВОЙ_ТОКЕН
+```
+
+Импортируется Mihomo с HTTPS mug-ссылки и автоматически подтягивается `https://olcsub.ptrkkvn.beer/ТВОЙ_ТОКЕН` (olcRTC). Нужен PTRK-KVN **1.1.2+**.
+
 <p align="center">
   <img src="docs/screenshots/home-ui.png" alt="Главный экран PTRK-KVN" width="220" />
   &nbsp;

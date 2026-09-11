@@ -12,6 +12,22 @@ Paste a Remnawave subscription URL — the client imports Clash/Mihomo YAML **an
 
 > **Compatibility note:** Fully tested and confirmed working **100%** with the **PTRK-KVN** VPN service (also known as Patrick KVN / PTRK KVN). Other Remnawave panels may work, but PTRK-KVN is the reference setup we vouch for.
 
+### Open from Remnawave subscription page
+
+In the subscription-page app entry set:
+
+```text
+urlScheme: ptrkkvn://add/
+```
+
+Example deep link (Happ-style concatenation):
+
+```text
+ptrkkvn://add/https://drink.ptrkkvn.beer/mug/YOUR_TOKEN
+```
+
+That imports Mihomo from the HTTPS mug URL and auto-pulls `https://olcsub.ptrkkvn.beer/YOUR_TOKEN` (olcRTC). Requires PTRK-KVN **1.1.2+**.
+
 <p align="center">
   <img src="docs/screenshots/home-ui.png" alt="PTRK-KVN home screen" width="220" />
   &nbsp;

@@ -1,6 +1,7 @@
 package org.olcbox.app
 
 import android.Manifest
+import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -9,11 +10,13 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import kotlinx.coroutines.flow.MutableStateFlow
 import org.olcbox.app.data.datasource.LocationsDataSourceImpl
 import org.olcbox.app.data.datasource.LocationsRepositoryImpl
 import org.olcbox.app.data.exporter.AndroidLogExporter
 import org.olcbox.app.data.identity.PersistentDeviceIdentityProvider
 import org.olcbox.app.data.importer.AndroidConfigImporter
+import org.olcbox.app.data.model.SubscriptionDeepLink
 import org.olcbox.app.ui.activities.AndroidMainScreen
 import org.olcbox.app.ui.features.home.HomeScreenViewModel
 import org.olcbox.app.ui.features.locations.LocationViewModel
@@ -22,6 +25,8 @@ import org.olcbox.app.update.AppUpdateService
 import org.olcbox.app.vpn.AndroidVpnManager
 
 class AppActivity : ComponentActivity() {
+
+    private val pendingImportUrl = MutableStateFlow<String?>(null)
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -36,6 +41,8 @@ class AppActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             requestPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
+
+        consumeDeepLink(intent)
 
         val vpnManager = AndroidVpnManager(this)
         val locationsDataSource = LocationsDataSourceImpl(this)
@@ -59,15 +66,31 @@ class AppActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             val dynamicThemeEnabled by vpnManager.dynamicThemeEnabled.collectAsState()
+            val importUrl by pendingImportUrl.collectAsState()
 
             AppTheme(useDynamicColor = dynamicThemeEnabled) {
                 AndroidMainScreen(
                     viewModel = viewModel,
                     locationViewModel = locationViewModel,
                     vpnManager = vpnManager,
-                    appUpdateService = updateService
+                    appUpdateService = updateService,
+                    pendingImportUrl = importUrl,
+                    onPendingImportConsumed = { pendingImportUrl.value = null },
                 )
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        consumeDeepLink(intent)
+    }
+
+    private fun consumeDeepLink(intent: Intent?) {
+        val raw = intent?.dataString
+            ?: intent?.getStringExtra(Intent.EXTRA_TEXT)
+            ?: return
+        pendingImportUrl.value = SubscriptionDeepLink.extractSubscriptionUrl(raw)
     }
 }
