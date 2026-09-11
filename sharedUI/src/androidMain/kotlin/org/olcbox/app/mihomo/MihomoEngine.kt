@@ -82,6 +82,17 @@ object MihomoEngine {
         "IP-CIDR,$NTC_PARTY_IPV4/32,PROXY,no-resolve",
     )
 
+    /**
+     * Public DNS is AAAA-only. Pin hosts to that AAAA (not box IPv4): IPv4 hosts
+     * broke VLESS/gRPC; no hosts + ipv6:false left resolve empty after mapdns.
+     * hev mapdns still sends the domain over SOCKS; clash dials this AAAA via node.
+     */
+    private fun ntcPartyHosts(): JSONObject =
+        JSONObject()
+            .put("ntc.party", NTC_PARTY_IPV6)
+            .put("www.ntc.party", NTC_PARTY_IPV6)
+            .put("box.ntc.party", NTC_PARTY_IPV6)
+
     private fun forceRules(): List<String> =
         MAPDNS_VIA_NODE_RULES + FORCE_VIA_GLOBAL_RULES + ntcPartyRules()
 
@@ -125,9 +136,8 @@ object MihomoEngine {
         val proxyForLog = selectedProxyName
             ?: selectedMap["GLOBAL"]
             ?: selectedMap["PROXY"]
-        // hev mapdns (100.64/10) + sniffer domain dial: works for Hy2 and VLESS/gRPC,
-        // including AAAA-only ntc.party. MAPDNS_VIA_NODE_RULES must stay first.
-        Log.i(TAG, "setupProfile proxy=$proxyForLog mapdns→GLOBAL ntc=domain-dial")
+        // mapdns→domain SOCKS; hosts→AAAA dial via node (works Hy2 + VLESS + olcRTC).
+        Log.i(TAG, "setupProfile proxy=$proxyForLog mapdns→GLOBAL ntc=hosts-AAAA=$NTC_PARTY_IPV6")
         val configPath = runtimeConfigWithForcedProxyDomains(yamlPath)
         // RKN TSPU hijacks UDP DNS to 8.8.8.8 / 1.1.1.1. Use carrier + Yandex,
         // and DoH over HTTPS (TCP) so nameserver lookups are not intercepted.
@@ -141,9 +151,10 @@ object MihomoEngine {
         }
         val overrides = JSONObject()
             .put("mode", mode)
-            .put("ipv6", false)
+            .put("ipv6", true)
             .put("unified-delay", true)
             .put("tcp-concurrent", true)
+            .put("hosts", ntcPartyHosts())
             // Keep a local mixed-port so we can diagnose; VpnService path does not need it.
             .put("mixed-port", 7890)
             .put(
@@ -212,7 +223,7 @@ object MihomoEngine {
                 "dns",
                 JSONObject()
                     .put("enable", true)
-                    .put("ipv6", false)
+                    .put("ipv6", true)
                     .put("use-hosts", true)
                     .put("use-system-hosts", false)
                     // redir-host: hev mapdns supplies fake IPs; sniffer restores domains.
@@ -251,14 +262,31 @@ object MihomoEngine {
         if (!src.isFile) return yamlPath
         val dest = File(src.parentFile, "${src.nameWithoutExtension}.runtime.yaml")
         var body = src.readText()
-        // Strip stale ntc hosts from older betas (IPv4/fake-ip pins).
+        // Pin ntc → public AAAA (not box IPv4). Strip stale IPv4/fake-ip pins first.
         body = body
             .replace(Regex("""(?m)^\s*ntc\.party:\s*.*\r?\n"""), "")
             .replace(Regex("""(?m)^\s*www\.ntc\.party:\s*.*\r?\n"""), "")
             .replace(Regex("""(?m)^\s*box\.ntc\.party:\s*.*\r?\n"""), "")
-        if (Regex("""(?m)^ipv6\s*:""").containsMatchIn(body)) {
-            body = body.replace(Regex("""(?m)^ipv6\s*:\s*\S+"""), "ipv6: false")
+        if (Regex("""(?m)^hosts\s*:""").containsMatchIn(body)) {
+            body = body.replaceFirst(
+                Regex("""(?m)^hosts\s*:\s*\r?\n"""),
+                "hosts:\n  ntc.party: $NTC_PARTY_IPV6\n  www.ntc.party: $NTC_PARTY_IPV6\n  box.ntc.party: $NTC_PARTY_IPV6\n",
+            )
+        } else {
+            body = body.trimEnd() + """
+
+hosts:
+  ntc.party: $NTC_PARTY_IPV6
+  www.ntc.party: $NTC_PARTY_IPV6
+  box.ntc.party: $NTC_PARTY_IPV6
+"""
         }
+        if (Regex("""(?m)^ipv6\s*:""").containsMatchIn(body)) {
+            body = body.replace(Regex("""(?m)^ipv6\s*:\s*\S+"""), "ipv6: true")
+        } else {
+            body = "ipv6: true\n$body"
+        }
+        body = body.replace(Regex("""(?m)^(\s+)ipv6\s*:\s*false\s*$"""), "$1ipv6: true")
         val insert = forceRules().joinToString("\n") { "  - $it" } + "\n"
         val match = RULES_SECTION.find(body)
         val patched = if (match != null) {
@@ -268,7 +296,7 @@ object MihomoEngine {
             body.trimEnd() + "\n\nrules:\n" + insert
         }
         dest.writeText(patched)
-        Log.i(TAG, "Force-proxy domains via GLOBAL prepended -> ${dest.name} mapdns+ntc")
+        Log.i(TAG, "Force-proxy domains via GLOBAL prepended -> ${dest.name} mapdns+hosts-AAAA")
         return dest.absolutePath
     }
 
