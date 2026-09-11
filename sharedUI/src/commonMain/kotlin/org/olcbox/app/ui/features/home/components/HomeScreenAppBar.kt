@@ -1,6 +1,11 @@
 package org.olcbox.app.ui.features.home.components
 
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.History
@@ -13,7 +18,13 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -25,14 +36,39 @@ fun HomeScreenAppBar(
     onSplitTunnelingClick: () -> Unit = {},
     onAddClick: () -> Unit = {}
 ) {
+    // 0 = PTRK-KVN, 1 = Mihomo + olcRTC, 2 = empty (still tappable)
+    var titleMode by remember { mutableIntStateOf(0) }
+    val titleText = when (titleMode) {
+        0 -> org.olcbox.app.i18n.S.appName
+        1 -> org.olcbox.app.i18n.S.appSubtitle
+        else -> ""
+    }
+
     CenterAlignedTopAppBar(
         title = {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(
-                    text = org.olcbox.app.i18n.S.appSubtitle,
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
+                Box(
+                    modifier = Modifier
+                        .defaultMinSize(minWidth = 120.dp, minHeight = 28.dp)
+                        .clickable(
+                            indication = null,
+                            interactionSource = remember { MutableInteractionSource() },
+                        ) {
+                            titleMode = (titleMode + 1) % 3
+                        },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (titleText.isNotEmpty()) {
+                        Text(
+                            text = titleText,
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                    } else {
+                        // Keep layout height so the bar does not jump when empty.
+                        Box(modifier = Modifier.height(20.dp))
+                    }
+                }
             }
         },
         navigationIcon = {

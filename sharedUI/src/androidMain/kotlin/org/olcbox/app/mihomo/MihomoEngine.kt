@@ -55,17 +55,23 @@ object MihomoEngine {
         "DOMAIN-SUFFIX,speedtestcustom.com,GLOBAL",
     )
 
-    /** ntc.party is IPv6-only — via node when it has IPv6, otherwise home (DIRECT). */
-    private fun ntcPartyRules(viaGlobal: Boolean): List<String> {
-        val policy = if (viaGlobal) "GLOBAL" else "DIRECT"
-        return listOf(
-            "DOMAIN-SUFFIX,ntc.party,$policy",
-            "DOMAIN-KEYWORD,ntc.party,$policy",
-        )
-    }
+    /** ntc.party is AAAA-only in public DNS; map to same-box IPv4 so any VPS can reach it. */
+    private const val NTC_PARTY_IPV4 = "130.255.77.28"
 
-    private fun forceRules(ntcViaGlobal: Boolean): List<String> =
-        FORCE_VIA_GLOBAL_RULES + ntcPartyRules(ntcViaGlobal)
+    /** ntc.party must always exit via the selected node (GLOBAL), never DIRECT. */
+    private fun ntcPartyRules(): List<String> = listOf(
+        "DOMAIN-SUFFIX,ntc.party,GLOBAL",
+        "DOMAIN-KEYWORD,ntc.party,GLOBAL",
+    )
+
+    private fun forceRules(): List<String> =
+        FORCE_VIA_GLOBAL_RULES + ntcPartyRules()
+
+    private fun ntcPartyHosts(): JSONObject =
+        JSONObject()
+            .put("ntc.party", NTC_PARTY_IPV4)
+            .put("www.ntc.party", NTC_PARTY_IPV4)
+            .put("box.ntc.party", NTC_PARTY_IPV4)
 
     suspend fun ensureInit(context: Context) {
         lock.withLock {
@@ -104,28 +110,18 @@ object MihomoEngine {
         this.mode = mode
         val selected = JSONObject()
         selectedMap.forEach { (k, v) -> selected.put(k, v) }
-        val proxyForIpv6 = selectedProxyName
+        val proxyForLog = selectedProxyName
             ?: selectedMap["GLOBAL"]
             ?: selectedMap["PROXY"]
-        val yamlBody = runCatching { File(yamlPath).readText() }.getOrNull().orEmpty()
-        val nodeHasIpv6 = proxyForIpv6
-            ?.takeIf { it.isNotBlank() }
-            ?.let { org.olcbox.app.data.model.ClashYaml.proxyHasIpv6(yamlBody, it) }
-            ?: false
-        // Enable stack IPv6 so DIRECT ntc.party can use home IPv6 when the VPS
-        // has no AAAA path; when the node has IPv6, ntc goes via GLOBAL.
-        val enableIpv6 = true
-        val ntcViaGlobal = nodeHasIpv6
-        Log.i(
-            TAG,
-            "setupProfile proxy=$proxyForIpv6 nodeIpv6=$nodeHasIpv6 ntc=${if (ntcViaGlobal) "GLOBAL" else "DIRECT"}",
-        )
+        // ntc.party publishes only AAAA publicly; force IPv4 hosts of the same box so
+        // IPv4-only VPS exits can still open it. Always route via the selected node.
+        Log.i(TAG, "setupProfile proxy=$proxyForLog ntc=GLOBAL hosts=$NTC_PARTY_IPV4")
         // No Xray-style TLS fragment in Mihomo: YouTube via DIRECT is broken under
         // RU throttling, so always pin youtube/googlevideo through GLOBAL (selected node).
         val configPath = if (mode.equals("global", ignoreCase = true)) {
             yamlPath
         } else {
-            runtimeConfigWithForcedProxyDomains(yamlPath, ntcViaGlobal)
+            runtimeConfigWithForcedProxyDomains(yamlPath)
         }
         // RKN TSPU hijacks UDP DNS to 8.8.8.8 / 1.1.1.1. Use carrier + Yandex,
         // and DoH over HTTPS (TCP) so nameserver lookups are not intercepted.
@@ -139,9 +135,10 @@ object MihomoEngine {
         }
         val overrides = JSONObject()
             .put("mode", mode)
-            .put("ipv6", enableIpv6)
+            .put("ipv6", false)
             .put("unified-delay", true)
             .put("tcp-concurrent", true)
+            .put("hosts", ntcPartyHosts())
             // Keep a local mixed-port so we can diagnose; VpnService path does not need it.
             .put("mixed-port", 7890)
             .put(
@@ -202,7 +199,7 @@ object MihomoEngine {
                 "dns",
                 JSONObject()
                     .put("enable", true)
-                    .put("ipv6", enableIpv6)
+                    .put("ipv6", false)
                     // Real IPs (no Clash fake-ip): hev must not use mapdns 100.64/10,
                     // which Clash treats as private → DIRECT and breaks rule mode.
                     .put("enhanced-mode", "redir-host")
@@ -217,7 +214,7 @@ object MihomoEngine {
         // Keep YouTube pin at the top even though MATCH,GLOBAL already covers it.
         if (mode.equals("global", ignoreCase = true)) {
             val rules = org.json.JSONArray()
-            forceRules(ntcViaGlobal).forEach { rules.put(it) }
+            forceRules().forEach { rules.put(it) }
             rules.put("GEOIP,private,DIRECT,no-resolve")
             rules.put("MATCH,GLOBAL")
             overrides.put("rules", rules)
@@ -236,15 +233,22 @@ object MihomoEngine {
      * Prepend force-proxy rules so subscription DIRECT/whitelist cannot win.
      * Writes sibling `*.runtime.yaml` — original profile on disk stays untouched.
      */
-    private fun runtimeConfigWithForcedProxyDomains(
-        yamlPath: String,
-        ntcViaGlobal: Boolean,
-    ): String {
+    private fun runtimeConfigWithForcedProxyDomains(yamlPath: String): String {
         val src = File(yamlPath)
         if (!src.isFile) return yamlPath
         val dest = File(src.parentFile, "${src.nameWithoutExtension}.runtime.yaml")
-        val body = src.readText()
-        val insert = forceRules(ntcViaGlobal).joinToString("\n") { "  - $it" } + "\n"
+        var body = src.readText()
+        // Ensure hosts map ntc.party → IPv4 of the same box (AAAA-only public DNS).
+        if (!Regex("""(?m)^hosts\s*:""").containsMatchIn(body)) {
+            body = body.trimEnd() + """
+
+hosts:
+  ntc.party: $NTC_PARTY_IPV4
+  www.ntc.party: $NTC_PARTY_IPV4
+  box.ntc.party: $NTC_PARTY_IPV4
+"""
+        }
+        val insert = forceRules().joinToString("\n") { "  - $it" } + "\n"
         val match = RULES_SECTION.find(body)
         val patched = if (match != null) {
             val lineEnd = body.indexOf('\n', match.range.last).let { if (it < 0) body.length else it + 1 }
@@ -253,7 +257,7 @@ object MihomoEngine {
             body.trimEnd() + "\n\nrules:\n" + insert
         }
         dest.writeText(patched)
-        Log.i(TAG, "Force-proxy domains via GLOBAL prepended -> ${dest.name} ntc=${if (ntcViaGlobal) "GLOBAL" else "DIRECT"}")
+        Log.i(TAG, "Force-proxy domains via GLOBAL prepended -> ${dest.name} ntc=GLOBAL+$NTC_PARTY_IPV4")
         return dest.absolutePath
     }
 

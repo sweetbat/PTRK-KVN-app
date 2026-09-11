@@ -141,6 +141,8 @@ class OlcboxVpnService : VpnService() {
     private var tun2socksStarted = false
     @Volatile
     private var tun2socksStopRequested = false
+    @Volatile
+    private var connectedServerLabel: String = ""
 
     private var wakeLock: PowerManager.WakeLock? = null
     private lateinit var connectivityManager: ConnectivityManager
@@ -475,6 +477,7 @@ class OlcboxVpnService : VpnService() {
                         stopTransportProcesses(closeTun = true, waitForSocksPort = false)
                         return@withLock
                     }
+                    rememberConnectedServer(entry)
 
                     if (entry.isMihomo()) {
                         startMihomoFullTunnel(entry, requestedGeneration, isMigration, isRestart)
@@ -1892,7 +1895,7 @@ class OlcboxVpnService : VpnService() {
         if (vpnRu()) "\u0417\u0430\u043f\u0443\u0441\u043a \u043f\u0440\u043e\u043a\u0441\u0438..." else "Starting proxy..."
 
     private fun vpnNotifyProtecting(): String =
-        if (vpnRu()) "VPN \u0430\u043a\u0442\u0438\u0432\u0435\u043d" else "Protecting your connection"
+        if (vpnRu()) "KVN \u041f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d" else "KVN Connected"
 
     private fun vpnNotifyWaitingNetwork(): String =
         if (vpnRu()) "\u041e\u0436\u0438\u0434\u0430\u043d\u0438\u0435 \u0441\u0435\u0442\u0438..." else "Waiting for network..."
@@ -1906,21 +1909,45 @@ class OlcboxVpnService : VpnService() {
     private fun vpnNotifyTunnelFailed(): String =
         if (vpnRu()) "\u041e\u0448\u0438\u0431\u043a\u0430 \u0442\u0443\u043d\u043d\u0435\u043b\u044f" else "Tunnel failed"
 
+    private fun vpnNotifyStopAction(): String =
+        if (vpnRu()) "\u0421\u0442\u043e\u043f" else "Stop"
+
     private fun updateNotification(status: String) {
         (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
             .notify(NOTIFICATION_ID, buildNotification(status))
     }
 
-    private fun buildNotification(status: String) =
-        NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
-            .setContentTitle("PTRK-KVN")
-            .setContentText(status)
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
+    private fun notificationSmallIcon(): Int {
+        val id = resources.getIdentifier("ic_stat_ptrk", "drawable", packageName)
+        return if (id != 0) id else android.R.drawable.ic_dialog_info
+    }
+
+    private fun rememberConnectedServer(entry: LocationEntry) {
+        connectedServerLabel = entry.metadata?.name?.trim()?.takeIf { it.isNotBlank() }
+            ?: entry.mihomoProxyName?.trim()?.takeIf { it.isNotBlank() }
+            ?: entry.name.trim().takeIf { it.isNotBlank() }
+            ?: ""
+    }
+
+    private fun buildNotification(status: String): android.app.Notification {
+        val connected = OlcboxVpnState.status.value is VpnStatus.Connected
+        val title = when {
+            connected -> if (vpnRu()) "KVN \u041f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d" else "KVN Connected"
+            else -> "PTRK-KVN"
+        }
+        val body = when {
+            connected && connectedServerLabel.isNotBlank() -> connectedServerLabel
+            else -> status
+        }
+        val builder = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setSmallIcon(notificationSmallIcon())
             .setOngoing(true)
             .setContentIntent(getAppPendingIntent())
             .addAction(
                 android.R.drawable.ic_menu_close_clear_cancel,
-                "Stop",
+                vpnNotifyStopAction(),
                 PendingIntent.getService(
                     this,
                     0,
@@ -1929,7 +1956,12 @@ class OlcboxVpnService : VpnService() {
                 )
             )
             .setPriority(NotificationCompat.PRIORITY_LOW)
-            .build()
+        if (connected && connectedServerLabel.isNotBlank()) {
+            @Suppress("DEPRECATION")
+            builder.setContentInfo(connectedServerLabel)
+        }
+        return builder.build()
+    }
 
     private fun getAppPendingIntent(): PendingIntent {
         return PendingIntent.getActivity(
@@ -1951,7 +1983,8 @@ class OlcboxVpnService : VpnService() {
         }
     }
 
-    private fun connectedNotificationText(): String = "${activeModeLabel()} Connected"
+    private fun connectedNotificationText(): String =
+        if (vpnRu()) "KVN \u041f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d" else "KVN Connected"
 
     private class AuthenticatedSocksProxy(
         private val listenPort: Int,

@@ -151,13 +151,42 @@ fun LocationSelectorScreen(
                             }
                         }
 
+                        fun usableExpire(value: String?): String? {
+                            val v = value?.trim()?.takeIf { it.isNotBlank() } ?: return null
+                            if (v.equals("regular", true) || v.equals("bypass", true)) return null
+                            return v.takeIf {
+                                it == "\u221e" || it == "∞" || it.contains('.') ||
+                                    it.contains('-') || it.any { ch -> ch.isDigit() }
+                            }
+                        }
+                        val expire = usableExpire(subscription?.description)
+                            ?: usableExpire(subscription?.comment)
+                        if (!expire.isNullOrBlank()) {
+                            Surface(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.55f),
+                                border = BorderStroke(
+                                    1.dp,
+                                    MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
+                                ),
+                            ) {
+                                Text(
+                                    text = "${org.olcbox.app.i18n.S.subscriptionExpires}: $expire",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                )
+                            }
+                        }
+
                         val trafficQuota = parseTrafficQuota(subscription?.used, subscription?.available)
                         val unlimitedTraffic = when {
                             trafficQuota != null -> null
                             !subscription?.used.isNullOrBlank() && !subscription?.available.isNullOrBlank() ->
-                                org.olcbox.app.i18n.S.trafficSummary(subscription!!.used!!, subscription.available!!)
+                                org.olcbox.app.i18n.S.trafficSummary(subscription.used!!, subscription.available!!)
                             !subscription?.used.isNullOrBlank() ->
-                                org.olcbox.app.i18n.S.localizeDataUnit(subscription!!.used!!)
+                                org.olcbox.app.i18n.S.localizeDataUnit(subscription.used!!)
                             else -> null
                         }
                         if (trafficQuota != null || !unlimitedTraffic.isNullOrBlank()) {
@@ -453,7 +482,7 @@ private fun SubscriptionGroupHeader(
     modifier: Modifier = Modifier
 ) {
     val first = locations.firstOrNull()
-    val title = first?.subscriptionTitle().orEmpty().ifBlank { "Subscriptions" }
+    val title = first?.subscriptionTitle().orEmpty()
 
     Column(modifier = modifier.padding(start = 4.dp, top = 2.dp)) {
         Text(
@@ -546,10 +575,23 @@ private fun LocationItem.subscriptionGroupKey(): String {
 
 private fun LocationItem.subscriptionTitle(): String {
     val subscription = metadata?.subscription
-
+    val urlToken = subscriptionUrl
+        ?.substringAfterLast('/')
+        ?.trim()
+        ?.takeIf { it.isNotBlank() }
+    val rawName = subscription?.name?.trim()?.takeIf { it.isNotBlank() }
+        ?.takeUnless { it == urlToken }
+        ?.takeUnless { it.equals("subscriptions", ignoreCase = true) }
+        ?.takeUnless { it.equals("regular", ignoreCase = true) }
+        ?.takeUnless { it.equals("bypass", ignoreCase = true) }
+    val title = (rawName ?: org.olcbox.app.i18n.S.appName)
+        .removePrefix("Olc ")
+        .removePrefix("olc ")
+        .trim()
+        .ifBlank { org.olcbox.app.i18n.S.appName }
     return listOfNotNull(
         subscription?.icon?.takeIf { it.isNotBlank() },
-        subscription?.name?.takeIf { it.isNotBlank() } ?: "Subscriptions"
+        title,
     ).joinToString(" ")
 }
 

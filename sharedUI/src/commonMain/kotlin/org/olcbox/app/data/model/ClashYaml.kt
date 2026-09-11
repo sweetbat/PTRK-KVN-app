@@ -155,8 +155,11 @@ object ClashYaml {
                             val value = unquote(kv.groupValues[2])
                             if (value.isNotBlank() && value != "|" && value != ">") {
                                 fields[key] = value
-                            } else if (key == "reality-opts" || key == "ws-opts" ||
-                                key == "grpc-opts" || key == "smux"
+                            } else if (
+                                key == "reality-opts" || key == "ws-opts" ||
+                                key == "grpc-opts" || key == "smux" ||
+                                key == "tls" || key == "ech-opts" ||
+                                key == "brutal-opts" || key == "hysteria-opts"
                             ) {
                                 fields[key] = "present"
                             }
@@ -240,8 +243,11 @@ object ClashYaml {
                             val value = unquote(kv.groupValues[2])
                             if (value.isNotBlank() && value != "|" && value != ">") {
                                 fields[key] = value
-                            } else if (key == "reality-opts" || key == "ws-opts" ||
-                                key == "grpc-opts" || key == "smux"
+                            } else if (
+                                key == "reality-opts" || key == "ws-opts" ||
+                                key == "grpc-opts" || key == "smux" ||
+                                key == "tls" || key == "ech-opts" ||
+                                key == "brutal-opts" || key == "hysteria-opts"
                             ) {
                                 fields[key] = "present"
                             }
@@ -270,7 +276,8 @@ object ClashYaml {
             val t = tag?.trim()?.uppercase()?.takeIf { it.isNotBlank() } ?: return
             if (t !in tags) tags += t
         }
-        when (val type = fields["type"]?.lowercase()) {
+        val type = fields["type"]?.lowercase()
+        when (type) {
             "vless" -> add("VLESS")
             "vmess" -> add("VMESS")
             "trojan" -> add("TROJAN")
@@ -300,15 +307,36 @@ object ClashYaml {
             fields["client-fingerprint"] != null && fields["public-key"] != null
         ) {
             add("REALITY")
-        } else when (fields["tls"]?.lowercase()) {
-            "true", "1", "tls" -> add("TLS")
-            else -> if (fields["security"]?.equals("tls", true) == true) add("TLS")
         }
+        val tlsHint = fields["tls"]?.lowercase()
+        val hasTls = fields.containsKey("tls") ||
+            tlsHint in setOf("true", "1", "tls", "present") ||
+            fields["security"]?.equals("tls", true) == true ||
+            !fields["sni"].isNullOrBlank() ||
+            !fields["servername"].isNullOrBlank() ||
+            !fields["alpn"].isNullOrBlank() ||
+            fields.containsKey("skip-cert-verify") ||
+            fields.containsKey("fingerprint") ||
+            fields.containsKey("client-fingerprint") ||
+            type == "hysteria" || type == "hysteria2" || type == "hy2" || type == "tuic"
+        if (hasTls && "REALITY" !in tags) add("TLS")
         fields["flow"]?.takeIf { it.contains("vision", ignoreCase = true) }?.let { add("VISION") }
         if (fields["packet-encoding"] != null ||
             fields["xmux"] != null ||
-            network == "xhttp"
+            network == "xhttp" ||
+            fields["obfs"]?.contains("salamander", ignoreCase = true) == true ||
+            fields.containsKey("brutal-opts") ||
+            // Remnawave / panel often labels Hysteria2 QUIC path as JSON in UIs.
+            ((type == "hysteria2" || type == "hy2") &&
+                (fields.containsKey("quic") || fields["ports"] != null ||
+                    fields["port-hopping"] != null || fields["hop-interval"] != null ||
+                    fields["up"] != null || fields["down"] != null))
         ) {
+            add("JSON")
+        }
+        // Hysteria2 is always TLS+QUIC; ensure both chips show even on minimal YAML.
+        if (type == "hysteria2" || type == "hy2") {
+            add("TLS")
             add("JSON")
         }
         return tags
