@@ -15,8 +15,13 @@ import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import org.olcbox.app.data.mihomo.MihomoAndroidContext
 import org.olcbox.app.data.mihomo.mihomoProfilePath
 import org.olcbox.app.mihomo.MihomoEngine
@@ -57,16 +62,21 @@ class MihomoProbeService : Service() {
 
         scope.launch {
             val delays = LinkedHashMap<String, Long>()
+            fun probeLog(msg: String) {
+                Log.i(TAG, msg)
+                runCatching {
+                    org.olcbox.app.vpn.service.VpnStatusBridge.publishLog(applicationContext, "MihomoProbe: $msg")
+                }
+            }
             runCatching {
                 val app = applicationContext
                 MihomoAndroidContext.app = app
-                val bootstrapDns = bindToUpstreamAndDns()
-                Log.i(TAG, "probe upstream dns=${bootstrapDns.joinToString(",")}")
+                val bootstrapDns = RuSafeDns.plainBootstrap(bindToUpstreamAndDns())
+                probeLog("dns=${bootstrapDns.joinToString(",")} proxies=${proxies.size}")
                 val path = mihomoProfilePath(profileId)
                     ?: error("mihomo profile missing: $profileId")
                 MihomoEngine.ensureInit(app)
-                // One setup for the whole batch.
-                MihomoEngine.setupProfile(
+                val setup = MihomoEngine.setupProfile(
                     context = app,
                     yamlPath = path,
                     selectedMap = emptyMap(),
@@ -74,29 +84,54 @@ class MihomoProbeService : Service() {
                     bootstrapDns = bootstrapDns,
                     testUrl = MihomoEngine.DEFAULT_TEST_URL,
                 )
-                // setupConfig kicks provider health-checks; give the core a beat before
-                // the first urlTest or the first leaf often returns -1.
+                probeLog("setupConfig: ${setup.take(120)}")
+                MihomoEngine.updateDns(bootstrapDns)
+                // Same warm-up as the working post-connect path: open listeners before urlTest.
+                // Without this, gRPC/VLESS leaves often return -1 while Hysteria still works.
+                MihomoEngine.setVpnState(enabled = false)
+                MihomoEngine.startListener()
                 kotlinx.coroutines.delay(1_200)
-                for ((index, proxyName) in proxies.withIndex()) {
-                    if (index > 0) kotlinx.coroutines.delay(100)
-                    var ms = runCatching {
-                        MihomoEngine.urlTestResilient(proxyName).takeIf { it > 0L }
-                    }.onFailure {
-                        Log.e(TAG, "mihomo probe failed for $proxyName", it)
-                    }.getOrNull()
-                    // First leaf is most likely to race health-check / dialer warm-up.
-                    if (ms == null && index == 0) {
-                        kotlinx.coroutines.delay(800)
-                        ms = runCatching {
-                            MihomoEngine.urlTestResilient(proxyName).takeIf { it > 0L }
-                        }.getOrNull()
-                        Log.i(TAG, "probe retry $proxyName -> ${ms ?: -1}")
-                    }
-                    delays[proxyName] = ms ?: -1L
-                    Log.i(TAG, "probe $proxyName -> ${ms ?: -1}")
+                val known = MihomoEngine.parseLeafProxyNames(MihomoEngine.getProxiesJson()).toSet()
+                val missing = proxies.filter { it !in known }
+                if (missing.isNotEmpty()) {
+                    probeLog("missing in core (${missing.size}): ${missing.take(3).joinToString()}")
                 }
+                // Low concurrency: gRPC HTTP/2 dials fight each other in a cold core.
+                val gate = Semaphore(2)
+                coroutineScope {
+                    proxies.map { proxyName ->
+                        async {
+                            gate.withPermit {
+                                var ms = runCatching {
+                                    MihomoEngine.urlTestResilient(proxyName).takeIf { it > 0L }
+                                }.onFailure {
+                                    Log.e(TAG, "mihomo probe failed for $proxyName", it)
+                                    probeLog("error $proxyName: ${it.message}")
+                                }.getOrNull()
+                                if (ms == null) {
+                                    kotlinx.coroutines.delay(350)
+                                    ms = runCatching {
+                                        MihomoEngine.urlTestResilient(proxyName).takeIf { it > 0L }
+                                    }.getOrNull()
+                                    if (ms != null) probeLog("retry $proxyName -> $ms")
+                                }
+                                proxyName to (ms ?: -1L)
+                            }
+                        }
+                    }.awaitAll().forEach { (name, ms) ->
+                        delays[name] = ms
+                        probeLog("$name -> $ms")
+                    }
+                }
+                runCatching { MihomoEngine.stopListener() }
             }.onFailure {
                 Log.e(TAG, "mihomo probe batch failed", it)
+                runCatching {
+                    org.olcbox.app.vpn.service.VpnStatusBridge.publishLog(
+                        applicationContext,
+                        "MihomoProbe: batch failed: ${it.message}",
+                    )
+                }
             }
 
             runCatching {
@@ -129,9 +164,8 @@ class MihomoProbeService : Service() {
     }
 
     /**
-     * Bind `:mihomo` to Wi‑Fi/cellular (not VPN) and return that network's DNS.
-     * T2/Tele2 often breaks probes that use only 8.8.8.8 / Google DoH for
-     * resolving proxy hostnames while the full VPN path (with protect) works.
+     * Bind `:mihomo` to Wi‑Fi/cellular (not VPN) and return that network's DNS,
+     * stripping Google/Cloudflare IPs hijacked by RKN TSPU on UDP/53.
      */
     private fun bindToUpstreamAndDns(): List<String> {
         val cm = getSystemService(ConnectivityManager::class.java) ?: return emptyList()
@@ -140,8 +174,16 @@ class MihomoProbeService : Service() {
             return !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) &&
                 caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
         }
+        fun score(network: Network): Int {
+            val caps = cm.getNetworkCapabilities(network) ?: return 0
+            var s = 1
+            if (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) s += 4
+            if (caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) s += 3
+            if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED)) s += 1
+            return s
+        }
         val network = cm.activeNetwork?.takeIf(::usable)
-            ?: cm.allNetworks.firstOrNull(::usable)
+            ?: cm.allNetworks.filter(::usable).maxByOrNull(::score)
             ?: return emptyList()
         val bound = runCatching { cm.bindProcessToNetwork(network) }.getOrDefault(false)
         Log.i(TAG, "bindProcessToNetwork($network) → $bound")
@@ -149,9 +191,11 @@ class MihomoProbeService : Service() {
             ?.dnsServers
             .orEmpty()
             .mapNotNull { it.hostAddress?.trim()?.takeIf { addr -> addr.isNotBlank() } }
-            .filter { ':' !in it } // IPv4
             .distinct()
-        return dns
+        val safe = RuSafeDns.sanitize(dns)
+        val ipv4 = safe.filter { ':' !in it }
+        val ipv6 = safe.filter { ':' in it }
+        return ipv4 + ipv6
     }
 
     companion object {
@@ -217,8 +261,8 @@ class MihomoProbeService : Service() {
                 Log.e(TAG, "failed to start mihomo probe", it)
                 return emptyMap()
             }
-            // Resilient urlTest may try several URLs per leaf on cellular.
-            val budget = timeoutMs.coerceAtLeast(12_000L + names.size * 12_000L)
+            // urlTest may retry a couple of URLs per leaf on cellular.
+            val budget = timeoutMs.coerceAtLeast(15_000L + names.size * 10_000L)
             if (!latch.await(budget, TimeUnit.MILLISECONDS)) {
                 Log.w(TAG, "mihomo probe batch timed out")
                 return resultRef.get()

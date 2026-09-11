@@ -511,10 +511,13 @@ class LocationViewModel(
 
     private companion object {
         const val LOCATION_PING_ATTEMPTS = 1
-        const val LOCATION_PING_TIMEOUT_MS = 12_000L
+        // Enough for one full Mihomo probe batch; keep UI responsive.
+        const val LOCATION_PING_TIMEOUT_MS = 60_000L
         const val LOCATION_PING_RETRY_DELAY_MS = 0L
-        // Finish each location check before starting the next one.
-        const val LOCATION_PING_PARALLELISM = 8
+        // High enough that all Mihomo nodes can register into one probe batch
+        // (regular + bypass). A low limit left bypass nodes for a 2nd wave that
+        // often timed out or never joined the first cold setup.
+        const val LOCATION_PING_PARALLELISM = 32
     }
 
     private data class ProviderDraft(

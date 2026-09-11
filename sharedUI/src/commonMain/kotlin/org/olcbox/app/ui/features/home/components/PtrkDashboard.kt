@@ -268,6 +268,9 @@ fun PtrkConnectButton(
     uptimeText: String?,
     onClick: () -> Unit,
 ) {
+    val language by AppLocale.language.collectAsState()
+    @Suppress("UNUSED_EXPRESSION")
+    language
     val pulse by animateFloatAsState(
         targetValue = if (isActive && !isLoading) 1.04f else 1f,
         animationSpec = tween(700),

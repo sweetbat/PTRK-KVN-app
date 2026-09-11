@@ -48,6 +48,7 @@ import org.olcbox.app.mihomo.MihomoEngine
 import org.olcbox.app.data.repository.LocationsRepository
 import org.olcbox.app.vpn.AndroidConnectionMode
 import org.olcbox.app.vpn.AndroidSocksProxySettings
+import org.olcbox.app.vpn.RuSafeDns
 import org.olcbox.app.vpn.AndroidSplitTunnelMode
 import org.olcbox.app.vpn.OlcRtcRoutingService
 import org.olcbox.app.vpn.UpstreamCandidate
@@ -634,7 +635,7 @@ class OlcboxVpnService : VpnService() {
             // No hev mapdns: its 100.64/10 answers hit GEOIP,private → DIRECT and
             // make rule-mode look like "everything is home IP".
             val pfd = establishSystemVpnTunnel(
-                dnsServers = listOf("8.8.8.8", "1.1.1.1"),
+                dnsServers = RuSafeDns.YANDEX_PLAIN,
                 extraBypassPackages = torrentBypassPackages(),
                 useMapDns = false,
             )
@@ -732,18 +733,21 @@ class OlcboxVpnService : VpnService() {
 
     private fun pushUpstreamDnsToMihomo(network: Network?) {
         if (network == null) return
-        val servers = connectivityManager.getLinkProperties(network)
-            ?.dnsServers
-            .orEmpty()
-            .mapNotNull { it.hostAddress?.takeIf(String::isNotBlank) }
-            .filterNot { it == "0.0.0.0" || it == "::" }
-        if (servers.isEmpty()) {
-            MihomoEngine.updateDns(listOf("8.8.8.8", "1.1.1.1"))
-            addLog("Mihomo updateDns fallback 8.8.8.8,1.1.1.1")
-        } else {
-            MihomoEngine.updateDns(servers)
-            addLog("Mihomo updateDns ${servers.joinToString(",")}")
-        }
+        val servers = RuSafeDns.sanitize(
+            connectivityManager.getLinkProperties(network)
+                ?.dnsServers
+                .orEmpty()
+                .mapNotNull { it.hostAddress?.takeIf(String::isNotBlank) },
+        )
+        val effective = servers.ifEmpty { RuSafeDns.YANDEX_PLAIN }
+        MihomoEngine.updateDns(effective)
+        addLog(
+            if (servers.isEmpty()) {
+                "Mihomo updateDns fallback ${effective.joinToString(",")}"
+            } else {
+                "Mihomo updateDns ${effective.joinToString(",")}"
+            },
+        )
     }
 
     private fun stopMihomoTun() {
@@ -1021,7 +1025,7 @@ class OlcboxVpnService : VpnService() {
                 .map { it.trim() }
                 .filter { it.isNotBlank() }
                 .distinct()
-                .ifEmpty { listOf(if (useMapDns) MAPDNS_ADDRESS else "8.8.8.8") }
+                .ifEmpty { listOf(if (useMapDns) MAPDNS_ADDRESS else RuSafeDns.YANDEX_PLAIN.first()) }
                 .forEach { builder.addDnsServer(it) }
 
             if (!applySplitTunneling(builder, extraBypassPackages)) return null

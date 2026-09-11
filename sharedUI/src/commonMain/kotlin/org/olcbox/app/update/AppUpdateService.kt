@@ -111,23 +111,55 @@ class AppUpdateService(
 
     private suspend fun fetchRelease(client: HttpClient, channel: ReleaseChannel): GithubRelease {
         return when (channel) {
-            ReleaseChannel.Stable -> fetchEndpoint(
-                client,
-                "https://api.github.com/repos/${mirror.ownerRepo}/releases/latest",
-            )
+            ReleaseChannel.Stable -> fetchStableRelease(client)
             ReleaseChannel.Nightly -> fetchBetaRelease(client)
         }
     }
 
-    private suspend fun fetchBetaRelease(client: HttpClient): GithubRelease {
-        // Prefer an explicit `beta` tag release; otherwise newest prerelease.
-        runCatching {
-            return fetchEndpoint(
-                client,
-                "https://api.github.com/repos/${mirror.ownerRepo}/releases/tags/beta",
-            )
+    private suspend fun fetchStableRelease(client: HttpClient): GithubRelease {
+        // Prefer newest non-prerelease. `/releases/latest` can point at a mistaken
+        // non-prerelease beta tag (e.g. v1.0.22-beta published without prerelease flag).
+        val listUrl = "https://api.github.com/repos/${mirror.ownerRepo}/releases?per_page=30"
+        val listed = runCatching { fetchReleaseList(client, listUrl) }.getOrNull()
+        if (listed != null) {
+            val stable = listed
+                .filter { !it.draft && !it.prerelease && !it.tagName.contains("beta", ignoreCase = true) }
+                .maxWithOrNull(compareBy<GithubReleaseListed> { versionRank(it.tagName) }
+                    .thenBy { it.publishedAt.orEmpty() })
+            if (stable != null) {
+                return GithubRelease(
+                    tagName = stable.tagName,
+                    htmlUrl = stable.htmlUrl,
+                    publishedAt = stable.publishedAt,
+                    assets = stable.assets,
+                )
+            }
         }
-        val listUrl = "https://api.github.com/repos/${mirror.ownerRepo}/releases?per_page=20"
+        return fetchEndpoint(
+            client,
+            "https://api.github.com/repos/${mirror.ownerRepo}/releases/latest",
+        )
+    }
+
+    private suspend fun fetchBetaRelease(client: HttpClient): GithubRelease {
+        // Newest versioned beta/prerelease — never prefer a stale literal tag named `beta`.
+        val listUrl = "https://api.github.com/repos/${mirror.ownerRepo}/releases?per_page=30"
+        val releases = fetchReleaseList(client, listUrl)
+        val beta = releases
+            .filter { !it.draft && (it.prerelease || it.tagName.contains("beta", ignoreCase = true)) }
+            .maxWithOrNull(compareBy<GithubReleaseListed> { versionRank(it.tagName) }
+                .thenBy { it.publishedAt.orEmpty() })
+            ?: releases.firstOrNull { !it.draft }
+            ?: error("No beta releases found for ${mirror.ownerRepo}")
+        return GithubRelease(
+            tagName = beta.tagName,
+            htmlUrl = beta.htmlUrl,
+            publishedAt = beta.publishedAt,
+            assets = beta.assets,
+        )
+    }
+
+    private suspend fun fetchReleaseList(client: HttpClient, listUrl: String): List<GithubReleaseListed> {
         val hwid = deviceIdentityProvider.hwid()
         val response = client.get(listUrl) {
             headers {
@@ -137,21 +169,22 @@ class AppUpdateService(
             }
         }
         if (response.status.value !in 200..299) {
-            error("GitHub beta release request failed with HTTP ${response.status.value}")
+            error("GitHub releases list failed with HTTP ${response.status.value}")
         }
-        val releases = json.decodeFromString(
+        return json.decodeFromString(
             kotlinx.serialization.builtins.ListSerializer(GithubReleaseListed.serializer()),
             response.bodyAsText(),
         )
-        val beta = releases.firstOrNull { it.prerelease && !it.draft }
-            ?: releases.firstOrNull { !it.draft }
-            ?: error("No beta releases found for ${mirror.ownerRepo}")
-        return GithubRelease(
-            tagName = beta.tagName,
-            htmlUrl = beta.htmlUrl,
-            publishedAt = beta.publishedAt,
-            assets = beta.assets,
-        )
+    }
+
+    private fun versionRank(tagName: String): Long {
+        val parts = tagName.removePrefix("v")
+            .substringBefore("-")
+            .split('.', '_', '-')
+            .mapNotNull { it.toLongOrNull() }
+        return (parts.getOrNull(0) ?: 0L) * 1_000_000L +
+            (parts.getOrNull(1) ?: 0L) * 1_000L +
+            (parts.getOrNull(2) ?: 0L)
     }
 
     private suspend fun fetchEndpoint(client: HttpClient, endpoint: String): GithubRelease {
@@ -195,15 +228,23 @@ class AppUpdateService(
             val preferredExtensions = platform.preferredExtensions
             val exactAbiAsset = platform.androidArchTokens.firstNotNullOfOrNull { archToken ->
                 selectAssetByTokens(assets, listOf("android", archToken), preferredExtensions)
+                    ?: selectAssetByTokens(assets, listOf(archToken), preferredExtensions)
             }
             if (exactAbiAsset != null) return exactAbiAsset
 
             val universalCandidates = assets.filter { asset ->
                 val name = asset.name.lowercase()
-                "android" in name && knownAndroidArchTokens.none { it in name }
+                ("android" in name || name.endsWith(".apk")) &&
+                    knownAndroidArchTokens.none { it in name }
             }
+            selectPreferredAsset(universalCandidates, preferredExtensions)?.let { return it }
 
-            return selectPreferredAsset(universalCandidates, preferredExtensions)
+            // Last resort: any .apk (e.g. PTRK-KVN-1.0.22-beta-arm64.apk already matched above;
+            // this catches oddly named universal builds).
+            return selectPreferredAsset(
+                assets.filter { it.name.lowercase().endsWith(".apk") },
+                preferredExtensions,
+            )
         }
 
         private fun selectAssetByTokens(
@@ -270,9 +311,14 @@ class AppUpdateService(
             releaseTag: String,
             asset: AppUpdateAsset
         ): String {
+            val fromTag = releaseTag.removePrefix("v")
+            val fromAsset = asset.name.versionToken()
             return when (channel) {
-                ReleaseChannel.Stable -> releaseTag.removePrefix("v")
-                ReleaseChannel.Nightly -> asset.name.versionToken() ?: releaseTag.removePrefix("v")
+                ReleaseChannel.Stable -> fromAsset ?: fromTag
+                // Prefer semver from asset/tag (v1.0.22-beta), not a bare "beta" tag name.
+                ReleaseChannel.Nightly -> fromAsset ?: fromTag.takeUnless { it.equals("beta", true) || it.equals("nightly", true) }
+                    ?: fromAsset
+                    ?: fromTag
             }
         }
 

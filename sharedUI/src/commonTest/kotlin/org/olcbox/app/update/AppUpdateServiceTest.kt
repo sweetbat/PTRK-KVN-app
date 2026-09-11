@@ -89,6 +89,17 @@ class AppUpdateServiceTest {
     }
 
     @Test
+    fun selectsArm64ApkWithoutAndroidToken() {
+        val selected = AppUpdateService.selectAsset(
+            assets = listOf(
+                GithubReleaseAsset("PTRK-KVN-1.0.22-beta-arm64.apk", "https://example/ptrk.apk")
+            ),
+            platform = UpdatePlatform("android", "arm64-v8a")
+        )
+        assertEquals("https://example/ptrk.apk", selected?.downloadUrl)
+    }
+
+    @Test
     fun prefersAndroidAbiSpecificApk() {
         val selected = AppUpdateService.selectAsset(
             assets = listOf(

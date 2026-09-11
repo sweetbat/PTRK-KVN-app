@@ -51,8 +51,9 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val mainHandler = Handler(Looper.getMainLooper())
     private val mihomoPingMutex = Mutex()
+    /** profileId → (proxyName → waiters) */
     private val mihomoPingWaiters =
-        mutableMapOf<String, MutableList<CompletableDeferred<Long?>>>()
+        mutableMapOf<String, MutableMap<String, MutableList<CompletableDeferred<Long?>>>>()
     private var mihomoPingFlushScheduled = false
 
     init {
@@ -445,45 +446,82 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
 
         val deferred = CompletableDeferred<Long?>()
         mihomoPingMutex.withLock {
-            mihomoPingWaiters.getOrPut(proxyName) { mutableListOf() }.add(deferred)
+            mihomoPingWaiters
+                .getOrPut(profileId) { mutableMapOf() }
+                .getOrPut(proxyName) { mutableListOf() }
+                .add(deferred)
             if (!mihomoPingFlushScheduled) {
                 mihomoPingFlushScheduled = true
                 scope.launch {
-                    delay(120)
-                    flushMihomoPingBatch(profileId)
+                    // Let regular + bypass nodes all register before one cold probe.
+                    var last = -1
+                    var stableRounds = 0
+                    val deadline = System.currentTimeMillis() + 2_000L
+                    while (System.currentTimeMillis() < deadline) {
+                        delay(150)
+                        val count = mihomoPingMutex.withLock {
+                            mihomoPingWaiters.values.sumOf { it.size }
+                        }
+                        if (count == last && count > 0) {
+                            stableRounds++
+                            if (stableRounds >= 2) break
+                        } else {
+                            stableRounds = 0
+                            last = count
+                        }
+                    }
+                    flushMihomoPingBatches()
                 }
             }
         }
         return deferred.await()
     }
 
-    private suspend fun flushMihomoPingBatch(profileId: String) {
-        val waiters = mihomoPingMutex.withLock {
+    private suspend fun flushMihomoPingBatches() {
+        val snapshot = mihomoPingMutex.withLock {
             mihomoPingFlushScheduled = false
-            val copy = mihomoPingWaiters.toMap().mapValues { it.value.toList() }
+            val copy = mihomoPingWaiters.mapValues { (_, byProxy) ->
+                byProxy.mapValues { it.value.toList() }
+            }
             mihomoPingWaiters.clear()
             copy
         }
-        if (waiters.isEmpty()) return
+        if (snapshot.isEmpty()) return
         val mode = MihomoModeStore.resolve(
             context = appContext,
             dataStoreValue = appContext.vpnPrefDataStore.data.first()[KEY_MIHOMO_MODE],
         )
-        val results = withContext(Dispatchers.IO) {
-            runCatching {
-                MihomoProbeService.pingMany(
-                    context = appContext,
-                    proxyNames = waiters.keys.toList(),
-                    profileId = profileId,
-                    mode = mode,
-                )
-            }.onFailure {
-                android.util.Log.w("AndroidVpnManager", "mihomo batch ping failed: ${it.message}")
-            }.getOrDefault(emptyMap())
-        }
-        waiters.forEach { (name, deferreds) ->
-            val value = results[name]
-            deferreds.forEach { it.complete(value) }
+        for ((profileId, waiters) in snapshot) {
+            if (waiters.isEmpty()) continue
+            val results = withContext(Dispatchers.IO) {
+                runCatching {
+                    org.olcbox.app.vpn.service.VpnStatusBridge.publishLog(
+                        appContext,
+                        "Mihomo ping: ${waiters.size} node(s), profile=$profileId, mode=$mode",
+                    )
+                    MihomoProbeService.pingMany(
+                        context = appContext,
+                        proxyNames = waiters.keys.toList(),
+                        profileId = profileId,
+                        mode = mode,
+                    )
+                }.onFailure {
+                    android.util.Log.w("AndroidVpnManager", "mihomo batch ping failed: ${it.message}")
+                    org.olcbox.app.vpn.service.VpnStatusBridge.publishLog(
+                        appContext,
+                        "Mihomo ping failed: ${it.message}",
+                    )
+                }.getOrDefault(emptyMap())
+            }
+            val ok = results.count { (_, v) -> v != null && v > 0L }
+            org.olcbox.app.vpn.service.VpnStatusBridge.publishLog(
+                appContext,
+                "Mihomo ping done: $ok/${waiters.size} online (profile=$profileId)",
+            )
+            waiters.forEach { (name, deferreds) ->
+                val value = results[name]
+                deferreds.forEach { it.complete(value) }
+            }
         }
     }
 

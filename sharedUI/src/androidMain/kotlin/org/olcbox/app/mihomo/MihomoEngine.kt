@@ -28,12 +28,12 @@ object MihomoEngine {
 
     private val RULES_SECTION = Regex("""(?m)^rules\s*:""")
 
-    const val DEFAULT_TEST_URL = "http://cp.cloudflare.com/generate_204"
+    // FlClashX default; HTTP variant is tried first in urlTestResilient (lighter for gRPC).
+    const val DEFAULT_TEST_URL = "https://www.gstatic.com/generate_204"
 
     private val TEST_URLS = listOf(
-        DEFAULT_TEST_URL,
-        "http://connectivitycheck.gstatic.com/generate_204",
         "http://www.gstatic.com/generate_204",
+        DEFAULT_TEST_URL,
         "http://captive.apple.com/hotspot-detect.html",
     )
 
@@ -89,17 +89,21 @@ object MihomoEngine {
         } else {
             runtimeConfigWithForcedProxyDomains(yamlPath)
         }
-        val dnsBootstrap = bootstrapDns
-            .map { it.trim() }
-            .filter { it.isNotBlank() && ':' !in it }
-            .distinct()
-            .ifEmpty { listOf("8.8.8.8", "1.1.1.1") }
-        val dnsBootstrapJson = org.json.JSONArray().also { arr ->
-            dnsBootstrap.forEach { arr.put(it) }
+        // RKN TSPU hijacks UDP DNS to 8.8.8.8 / 1.1.1.1. Use carrier + Yandex,
+        // and DoH over HTTPS (TCP) so nameserver lookups are not intercepted.
+        val plainDns = org.olcbox.app.vpn.RuSafeDns.plainBootstrap(bootstrapDns)
+        val nameServers = org.olcbox.app.vpn.RuSafeDns.clashNameservers(bootstrapDns)
+        val plainDnsJson = org.json.JSONArray().also { arr ->
+            plainDns.forEach { arr.put(it) }
+        }
+        val nameServersJson = org.json.JSONArray().also { arr ->
+            nameServers.forEach { arr.put(it) }
         }
         val overrides = JSONObject()
             .put("mode", mode)
             .put("ipv6", false)
+            .put("unified-delay", true)
+            .put("tcp-concurrent", true)
             // Keep a local mixed-port so we can diagnose; VpnService path does not need it.
             .put("mixed-port", 7890)
             .put(
@@ -165,16 +169,11 @@ object MihomoEngine {
                     // which Clash treats as private → DIRECT and breaks rule mode.
                     .put("enhanced-mode", "redir-host")
                     .put("listen", "0.0.0.0:1053")
-                    .put(
-                        "nameserver",
-                        org.json.JSONArray()
-                            .put("https://dns.google/dns-query")
-                            .put("https://1.1.1.1/dns-query")
-                            .put("8.8.8.8"),
-                    )
-                    .put("default-nameserver", dnsBootstrapJson)
-                    .put("proxy-server-nameserver", dnsBootstrapJson)
-                    .put("direct-nameserver", dnsBootstrapJson),
+                    .put("nameserver", nameServersJson)
+                    // Bootstrap DoH hostnames + proxy dial — plain UDP only (Yandex).
+                    .put("default-nameserver", plainDnsJson)
+                    .put("proxy-server-nameserver", plainDnsJson)
+                    .put("direct-nameserver", plainDnsJson),
             )
         // Routing off: wipe subscription rules (RU whitelist would still DIRECT).
         // Keep YouTube pin at the top even though MATCH,GLOBAL already covers it.
@@ -247,11 +246,15 @@ object MihomoEngine {
         return parseDelayMs(raw)
     }
 
-    /** Try a few captive-portal URLs — gstatic is often flaky on RU cellular (T2). */
+    /** HTTP first (gRPC-friendly), then HTTPS — matches what works after VPN startListener. */
     suspend fun urlTestResilient(proxyName: String): Long {
         for (url in TEST_URLS) {
-            val ms = runCatching { urlTest(proxyName, url, timeoutMs = 9_000L) }.getOrDefault(-1L)
-            if (ms > 0L) return ms
+            val ms = runCatching { urlTest(proxyName, url, timeoutMs = 10_000L) }.getOrDefault(-1L)
+            if (ms > 0L) {
+                Log.i(TAG, "urlTestResilient $proxyName ok via $url → ${ms}ms")
+                return ms
+            }
+            Log.i(TAG, "urlTestResilient $proxyName fail via $url")
         }
         return -1L
     }

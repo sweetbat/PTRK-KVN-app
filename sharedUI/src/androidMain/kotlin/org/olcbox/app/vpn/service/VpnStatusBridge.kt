@@ -27,6 +27,7 @@ object VpnStatusBridge {
     private const val KIND_RECONNECTING = "reconnecting"
     private const val KIND_STOPPING = "stopping"
     private const val KIND_ERROR = "error"
+    private const val KIND_LOG = "log"
 
     private val _logs = MutableStateFlow<List<String>>(emptyList())
     val logs: StateFlow<List<String>> = _logs.asStateFlow()
@@ -76,6 +77,16 @@ object VpnStatusBridge {
         applyLocal(status, log, fromService = true)
     }
 
+    /** Append a log line in the UI process without changing VPN status (e.g. `:mihomo` probe). */
+    fun publishLog(context: Context, log: String) {
+        if (log.isBlank()) return
+        val intent = Intent(ACTION).setPackage(context.packageName)
+            .putExtra(EXTRA_KIND, KIND_LOG)
+            .putExtra(EXTRA_LOG, log)
+        context.sendBroadcast(intent)
+        _logs.update { (it + log).takeLast(1_000) }
+    }
+
     fun ensureRegistered(context: Context) {
         if (registered) return
         synchronized(this) {
@@ -86,6 +97,13 @@ object VpnStatusBridge {
                 override fun onReceive(ctx: Context?, intent: Intent?) {
                     if (intent?.action != ACTION) return
                     val kind = intent.getStringExtra(EXTRA_KIND) ?: return
+                    if (kind == KIND_LOG) {
+                        val log = intent.getStringExtra(EXTRA_LOG)
+                        if (!log.isNullOrBlank()) {
+                            _logs.update { (it + log).takeLast(1_000) }
+                        }
+                        return
+                    }
                     val status = when (kind) {
                         KIND_CONNECTING -> VpnStatus.Connecting
                         KIND_CONNECTED -> VpnStatus.Connected
