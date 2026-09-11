@@ -25,11 +25,14 @@ object OlcRtcRoutingConfig {
         "DOMAIN-SUFFIX,speedtest.net,PROXY",
         "DOMAIN-SUFFIX,ookla.com,PROXY",
         "DOMAIN-SUFFIX,speedtestcustom.com,PROXY",
-        // IPv6-only forum: always via tunnel; hosts map AAAA → same-box IPv4.
+        // ntc.party: fake-ip locally, dial domain via tunnel (VPS resolves AAAA).
         "DOMAIN,ntc.party,PROXY",
         "DOMAIN-SUFFIX,ntc.party,PROXY",
         "DOMAIN-KEYWORD,ntc.party,PROXY",
+        "IP-CIDR,198.18.0.53/32,PROXY,no-resolve",
+        "IP-CIDR,198.18.0.0/16,PROXY,no-resolve",
         "IP-CIDR,130.255.77.28/32,PROXY,no-resolve",
+        "IP-CIDR6,2a02:e00:ffec:4b8::1/128,PROXY,no-resolve",
     )
 
     fun outputFile(context: Context): File =
@@ -72,9 +75,9 @@ object OlcRtcRoutingConfig {
             appendLine("unified-delay: true")
             appendLine()
             appendLine("hosts:")
-            appendLine("  ntc.party: 130.255.77.28")
-            appendLine("  www.ntc.party: 130.255.77.28")
-            appendLine("  box.ntc.party: 130.255.77.28")
+            appendLine("  ntc.party: 198.18.0.53")
+            appendLine("  www.ntc.party: 198.18.0.53")
+            appendLine("  box.ntc.party: 198.18.0.53")
             appendLine()
             appendLine("dns:")
             appendLine("  enable: true")
@@ -82,6 +85,16 @@ object OlcRtcRoutingConfig {
             appendLine("  use-hosts: true")
             appendLine("  use-system-hosts: false")
             appendLine("  enhanced-mode: redir-host")
+            appendLine("  fake-ip-range: 198.18.0.1/16")
+            appendLine()
+            appendLine("sniffer:")
+            appendLine("  enable: true")
+            appendLine("  force-dns-mapping: true")
+            appendLine("  parse-pure-ip: true")
+            appendLine("  override-destination: true")
+            appendLine("  force-domain:")
+            appendLine("    - ntc.party")
+            appendLine("    - +.ntc.party")
             appendLine()
             appendLine("proxies:")
             appendLine("  - name: $PROXY_NAME")
