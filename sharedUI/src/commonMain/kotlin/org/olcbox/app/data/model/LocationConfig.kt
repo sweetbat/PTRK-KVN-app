@@ -516,6 +516,8 @@ data class LocationMetadata(
     val ip: String? = null,
     val comment: String? = null,
     val mimo: String? = null,
+    /** olcsub SOCKS exit country (`de` / `pl` / `fi`); same room+key, different exits. */
+    val exit: String? = null,
     val subscription: SubscriptionMetadata? = null
 ) {
     fun normalized(): LocationMetadata {
@@ -532,6 +534,7 @@ data class LocationMetadata(
             ip = ip.cleanMetadataValue(),
             comment = comment.cleanMetadataValue(),
             mimo = mimo.cleanMetadataValue(),
+            exit = exit.cleanMetadataValue()?.lowercase(),
             subscription = normalizedSubscription
         )
     }
@@ -551,6 +554,7 @@ data class LocationMetadata(
                 ip.isNullOrBlank() &&
                 comment.isNullOrBlank() &&
                 mimo.isNullOrBlank() &&
+                exit.isNullOrBlank() &&
                 (subscription == null || subscription.isEmpty())
     }
 }

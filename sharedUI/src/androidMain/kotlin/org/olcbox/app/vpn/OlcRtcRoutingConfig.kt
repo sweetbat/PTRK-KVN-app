@@ -14,12 +14,17 @@ object OlcRtcRoutingConfig {
     const val MIXED_PORT = 7890
     private const val OUT_NAME = "olcrtc-routing.yaml"
 
-    private val YOUTUBE_RULES = listOf(
+    private val FORCE_PROXY_RULES = listOf(
         "DOMAIN-KEYWORD,youtube,PROXY",
         "DOMAIN-KEYWORD,googlevideo,PROXY",
         "DOMAIN-KEYWORD,ytimg,PROXY",
         "DOMAIN-SUFFIX,youtu.be,PROXY",
         "DOMAIN-SUFFIX,ggpht.com,PROXY",
+        "DOMAIN-KEYWORD,speedtest,PROXY",
+        "DOMAIN-KEYWORD,ookla,PROXY",
+        "DOMAIN-SUFFIX,speedtest.net,PROXY",
+        "DOMAIN-SUFFIX,ookla.com,PROXY",
+        "DOMAIN-SUFFIX,speedtestcustom.com,PROXY",
     )
 
     fun outputFile(context: Context): File =
@@ -46,7 +51,7 @@ object OlcRtcRoutingConfig {
         } else {
             fallbackRules()
         }
-        val youtube = YOUTUBE_RULES.joinToString("\n") { "  - $it" }
+        val youtube = FORCE_PROXY_RULES.joinToString("\n") { "  - $it" }
         val rulesBody = rewrittenRules
             .lineSequence()
             .dropWhile { it.trim().isEmpty() || it.trimStart().startsWith("rules:") }

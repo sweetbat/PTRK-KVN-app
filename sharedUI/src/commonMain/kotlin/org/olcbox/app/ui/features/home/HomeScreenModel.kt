@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -17,6 +18,9 @@ import kotlinx.coroutines.withTimeoutOrNull
 import org.olcbox.app.data.exporter.LogExporter
 import org.olcbox.app.data.importer.ConfigImporter
 import org.olcbox.app.data.model.LocationConfig
+import org.olcbox.app.data.model.LocationEntry
+import org.olcbox.app.data.model.PtrkSubscriptionCompanion
+import org.olcbox.app.data.olcsub.OlcSubExitClient
 import org.olcbox.app.data.repository.LocationImportResult
 import org.olcbox.app.data.repository.LocationsRepository
 import org.olcbox.app.ui.features.locations.LocationItem
@@ -27,7 +31,8 @@ class HomeScreenViewModel(
     private val vpnManager: VpnManager,
     private val locationsRepository: LocationsRepository,
     private val configImporter: ConfigImporter,
-    private val logExporter: LogExporter
+    private val logExporter: LogExporter,
+    private val olcSubExitClient: OlcSubExitClient = OlcSubExitClient(),
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(
@@ -46,6 +51,16 @@ class HomeScreenViewModel(
     private val subscriptionRefreshWake = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val state get() = _state.asStateFlow()
     val logs get() = vpnManager.logs
+
+    /** When POST /exit fails before tunnel (whitelist), retry once after Connected. */
+    private data class PendingOlcSubExit(
+        val storageId: String,
+        val exitRequestUrl: String,
+        val exit: String,
+    )
+
+    private var pendingOlcSubExit: PendingOlcSubExit? = null
+    private var olcSubExitTunnelRetryArmed: Boolean = false
 
     init {
         loadCurrentConfig()
@@ -102,6 +117,13 @@ class HomeScreenViewModel(
                             connectedSinceEpochMs = null,
                         )
                     }
+                }
+                if (status is VpnStatus.Connected) {
+                    maybeRetryOlcSubExitAfterTunnel()
+                }
+                if (status is VpnStatus.Disconnected || status is VpnStatus.Error) {
+                    // Allow a fresh whitelist retry on the next successful connect.
+                    olcSubExitTunnelRetryArmed = pendingOlcSubExit != null
                 }
             }
         }
@@ -188,7 +210,7 @@ class HomeScreenViewModel(
         if (status is VpnStatus.Stopping) {
             viewModelScope.launch {
                 runCatching { vpnManager.stopVpn() }
-                kotlinx.coroutines.delay(400)
+                delay(400)
                 _state.update {
                     it.copy(isVpnConnected = false, isVpnLoading = false, connectedSinceEpochMs = null)
                 }
@@ -196,7 +218,7 @@ class HomeScreenViewModel(
                 val active = locationsRepository.getActiveLocation()
                 if (active == null || !active.location.isComplete()) return@launch
                 _state.update { it.copy(isVpnLoading = true) }
-                vpnManager.startVpn()
+                prepareOlcSubExitThenStart(active)
             }
             return
         }
@@ -218,7 +240,7 @@ class HomeScreenViewModel(
                         }
                         return@launch
                     }
-                    vpnManager.startVpn()
+                    prepareOlcSubExitThenStart(active)
                 }
             } catch (e: Exception) {
                 _state.update { it.copy(isVpnLoading = false) }
@@ -246,13 +268,66 @@ class HomeScreenViewModel(
                     }
                 } else {
                     vpnManager.prepareActiveEngine()
-                    vpnManager.startVpn()
+                    prepareOlcSubExitThenStart(active)
                 }
             }
 
             VpnStatus.Disconnected,
             VpnStatus.Stopping,
             is VpnStatus.Error -> vpnManager.prepareActiveEngine()
+        }
+    }
+
+    private suspend fun prepareOlcSubExitThenStart(active: LocationEntry) {
+        armOlcSubExitIfNeeded(active)
+        runCatching {
+            val applied = olcSubExitClient.prepareExitBeforeConnect(active)
+            if (applied) {
+                pendingOlcSubExit = null
+                olcSubExitTunnelRetryArmed = false
+            }
+        }
+        vpnManager.startVpn()
+    }
+
+    private fun armOlcSubExitIfNeeded(active: LocationEntry) {
+        val exit = PtrkSubscriptionCompanion.normalizeExitCountry(active.metadata?.exit) ?: run {
+            pendingOlcSubExit = null
+            olcSubExitTunnelRetryArmed = false
+            return
+        }
+        val exitUrl = PtrkSubscriptionCompanion.exitRequestUrl(active.subscriptionUrl) ?: run {
+            pendingOlcSubExit = null
+            olcSubExitTunnelRetryArmed = false
+            return
+        }
+        pendingOlcSubExit = PendingOlcSubExit(
+            storageId = active.storageId,
+            exitRequestUrl = exitUrl,
+            exit = exit,
+        )
+        olcSubExitTunnelRetryArmed = true
+    }
+
+    private fun maybeRetryOlcSubExitAfterTunnel() {
+        val pending = pendingOlcSubExit ?: return
+        if (!olcSubExitTunnelRetryArmed) return
+        olcSubExitTunnelRetryArmed = false
+        viewModelScope.launch {
+            delay(800)
+            val active = locationsRepository.getActiveLocation() ?: return@launch
+            if (active.storageId != pending.storageId) return@launch
+            if (vpnManager.status.value !is VpnStatus.Connected) return@launch
+            val ok = olcSubExitClient.setExitCountry(pending.exitRequestUrl, pending.exit).isSuccess
+            if (!ok) return@launch
+            pendingOlcSubExit = null
+            delay(1_500)
+            if (vpnManager.status.value !is VpnStatus.Connected) return@launch
+            val stillActive = locationsRepository.getActiveLocation()
+            if (stillActive?.storageId != pending.storageId) return@launch
+            _state.update { it.copy(isVpnLoading = true) }
+            vpnManager.prepareActiveEngine()
+            vpnManager.startVpn()
         }
     }
     private fun updateLocationConfig(block: (LocationConfig) -> LocationConfig) {

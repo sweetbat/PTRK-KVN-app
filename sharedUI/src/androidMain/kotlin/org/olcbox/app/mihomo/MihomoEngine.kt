@@ -37,13 +37,22 @@ object MihomoEngine {
         "http://captive.apple.com/hotspot-detect.html",
     )
 
-    /** Always via selected node — Mihomo has no Xray TLS fragment for DIRECT. */
-    private val YOUTUBE_VIA_GLOBAL_RULES = listOf(
+    /**
+     * Always via selected node — Mihomo has no Xray TLS fragment for DIRECT.
+     * YouTube: RU throttle on DIRECT. Speedtest/Ookla: whitelist DIRECT breaks
+     * the site/app when routing (rule mode) is on.
+     */
+    private val FORCE_VIA_GLOBAL_RULES = listOf(
         "DOMAIN-KEYWORD,youtube,GLOBAL",
         "DOMAIN-KEYWORD,googlevideo,GLOBAL",
         "DOMAIN-KEYWORD,ytimg,GLOBAL",
         "DOMAIN-SUFFIX,youtu.be,GLOBAL",
         "DOMAIN-SUFFIX,ggpht.com,GLOBAL",
+        "DOMAIN-KEYWORD,speedtest,GLOBAL",
+        "DOMAIN-KEYWORD,ookla,GLOBAL",
+        "DOMAIN-SUFFIX,speedtest.net,GLOBAL",
+        "DOMAIN-SUFFIX,ookla.com,GLOBAL",
+        "DOMAIN-SUFFIX,speedtestcustom.com,GLOBAL",
     )
 
     suspend fun ensureInit(context: Context) {
@@ -179,7 +188,7 @@ object MihomoEngine {
         // Keep YouTube pin at the top even though MATCH,GLOBAL already covers it.
         if (mode.equals("global", ignoreCase = true)) {
             val rules = org.json.JSONArray()
-            YOUTUBE_VIA_GLOBAL_RULES.forEach { rules.put(it) }
+            FORCE_VIA_GLOBAL_RULES.forEach { rules.put(it) }
             rules.put("GEOIP,private,DIRECT,no-resolve")
             rules.put("MATCH,GLOBAL")
             overrides.put("rules", rules)
@@ -195,7 +204,7 @@ object MihomoEngine {
     }
 
     /**
-     * Prepend YouTube force-proxy rules so subscription DIRECT/whitelist cannot win.
+     * Prepend force-proxy rules so subscription DIRECT/whitelist cannot win.
      * Writes sibling `*.runtime.yaml` — original profile on disk stays untouched.
      */
     private fun runtimeConfigWithForcedProxyDomains(yamlPath: String): String {
@@ -203,7 +212,7 @@ object MihomoEngine {
         if (!src.isFile) return yamlPath
         val dest = File(src.parentFile, "${src.nameWithoutExtension}.runtime.yaml")
         val body = src.readText()
-        val insert = YOUTUBE_VIA_GLOBAL_RULES.joinToString("\n") { "  - $it" } + "\n"
+        val insert = FORCE_VIA_GLOBAL_RULES.joinToString("\n") { "  - $it" } + "\n"
         val match = RULES_SECTION.find(body)
         val patched = if (match != null) {
             val lineEnd = body.indexOf('\n', match.range.last).let { if (it < 0) body.length else it + 1 }
@@ -212,7 +221,7 @@ object MihomoEngine {
             body.trimEnd() + "\n\nrules:\n" + insert
         }
         dest.writeText(patched)
-        Log.i(TAG, "YouTube via GLOBAL prepended -> ${dest.name}")
+        Log.i(TAG, "Force-proxy domains via GLOBAL prepended -> ${dest.name}")
         return dest.absolutePath
     }
 
@@ -240,16 +249,26 @@ object MihomoEngine {
         val params = JSONObject()
             .put("proxy-name", proxyName)
             .put("test-url", testUrl)
-            .put("timeout", timeoutMs.toInt().coerceIn(3_000, 20_000))
+            .put("timeout", timeoutMs.toInt().coerceIn(3_000, 30_000))
             .toString()
         val raw = invoke("asyncTestDelay", params, timeoutMs = timeoutMs + 4_000L)
         return parseDelayMs(raw)
     }
 
-    /** HTTP first (gRPC-friendly), then HTTPS — matches what works after VPN startListener. */
-    suspend fun urlTestResilient(proxyName: String): Long {
+    /**
+     * HTTP first (gRPC-friendly), then HTTPS. Overall budget ~30s per node so
+     * several URL attempts fit without stretching a single probe forever.
+     */
+    suspend fun urlTestResilient(
+        proxyName: String,
+        overallTimeoutMs: Long = 30_000L,
+    ): Long {
+        val started = System.currentTimeMillis()
         for (url in TEST_URLS) {
-            val ms = runCatching { urlTest(proxyName, url, timeoutMs = 10_000L) }.getOrDefault(-1L)
+            val left = overallTimeoutMs - (System.currentTimeMillis() - started)
+            if (left < 2_500L) break
+            val slice = minOf(10_000L, left)
+            val ms = runCatching { urlTest(proxyName, url, timeoutMs = slice) }.getOrDefault(-1L)
             if (ms > 0L) {
                 Log.i(TAG, "urlTestResilient $proxyName ok via $url → ${ms}ms")
                 return ms

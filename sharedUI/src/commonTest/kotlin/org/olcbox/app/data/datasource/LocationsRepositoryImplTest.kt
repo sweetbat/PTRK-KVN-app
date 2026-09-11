@@ -319,6 +319,42 @@ class LocationsRepositoryImplTest {
         assertEquals(subscriptionMetadata, imported.locations[1].metadata?.subscription)
     }
 
+    @Test
+    fun importsSameRoomWithDifferentExitsAsDistinctServers() = runTest {
+        val source = FakeLocationsDataSource()
+        val key = "a".repeat(64)
+        val clean = """
+            olcrtc://wbstream?vp8channel@room-shared#$key${'$'}🇩🇪 Германия
+            ##name: Германия
+            ##icon: 🇩🇪
+            ##exit: de
+
+            olcrtc://wbstream?vp8channel@room-shared#$key${'$'}🇵🇱 Польша
+            ##name: Польша
+            ##icon: 🇵🇱
+            ##exit: pl
+
+            olcrtc://wbstream?vp8channel@room-shared#$key${'$'}🇫🇮 Финляндия
+            ##name: Финляндия
+            ##icon: 🇫🇮
+            ##exit: fi
+        """.trimIndent()
+
+        val importResult = LocationsRepositoryImpl(source).importTextDetailed(clean)
+        assertIs<LocationImportResult.Success>(importResult, importResult.toString())
+
+        val imported = source.stored
+        assertNotNull(imported)
+        assertEquals(3, imported.locations.size)
+        assertEquals(listOf("Германия", "Польша", "Финляндия"), imported.locations.map { it.location.name })
+        assertEquals(listOf("de", "pl", "fi"), imported.locations.map { it.metadata?.exit })
+        assertEquals(listOf("🇩🇪", "🇵🇱", "🇫🇮"), imported.locations.map { it.metadata?.icon })
+        assertEquals(1, imported.locations.map { it.location.id }.distinct().size)
+        assertEquals(1, imported.locations.map { it.location.key }.distinct().size)
+        assertEquals(3, imported.locations.map { it.storageId }.distinct().size)
+        assertTrue(imported.locations.all { it.storageId.contains("_de") || it.storageId.contains("_pl") || it.storageId.contains("_fi") })
+    }
+
     fun importUpdatesMatchingStorageIdsAndAppendsNewLocations() = runTest {
         val source = FakeLocationsDataSource(
             stored = LocationBundleV4(

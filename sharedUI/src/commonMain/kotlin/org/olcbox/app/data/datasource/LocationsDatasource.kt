@@ -1146,14 +1146,14 @@ class LocationsRepositoryImpl(
         }
         val usedStorageIds = currentBundle.locations.mapTo(mutableSetOf()) { it.storageId }
         val previousBySignature = previousEntries
-            .groupBy { subscriptionSignature(it.location) }
+            .groupBy { subscriptionSignature(it) }
             .mapValues { (_, entries) -> entries.toMutableList() }
         val manualInterval = previousEntries.firstNotNullOfOrNull {
             it.metadata?.subscription?.manualUpdateIntervalMs
         }
 
         val updatedEntries = imported.locations.mapIndexed { index, entry ->
-            val previousPool = previousBySignature[subscriptionSignature(entry.location)]
+            val previousPool = previousBySignature[subscriptionSignature(entry)]
             val previousEntry = if (previousPool.isNullOrEmpty()) {
                 null
             } else {
@@ -1403,7 +1403,11 @@ class LocationsRepositoryImpl(
                     parsed.location.name
                 )
             ).normalized()
-            val base = location.storageSlug().ifBlank { "location_${index + 1}" }
+            val exitSlug = PtrkSubscriptionCompanion.normalizeExitCountry(fields["exit"])
+            val base = buildString {
+                append(location.storageSlug().ifBlank { "location_${index + 1}" })
+                if (exitSlug != null) append("_$exitSlug")
+            }
             val storageId = uniqueStorageId("imported_$base", usedStorageIds)
             LocationEntry.from(
                 storageId = storageId,
@@ -1500,6 +1504,8 @@ class LocationsRepositoryImpl(
             ip = fields["ip"],
             comment = fields["comment"],
             mimo = mimo,
+            exit = PtrkSubscriptionCompanion.normalizeExitCountry(fields["exit"])
+                ?: fields["exit"],
             subscription = subscription
         ).normalized().takeUnless { it.isEmpty() }
     }
@@ -1564,13 +1570,15 @@ class LocationsRepositoryImpl(
         }.getOrNull()
     }
 
-    private fun subscriptionSignature(location: LocationConfig): String {
-        val normalized = location.normalized()
+    private fun subscriptionSignature(entry: LocationEntry): String {
+        val normalized = entry.location.normalized()
+        val exit = PtrkSubscriptionCompanion.normalizeExitCountry(entry.metadata?.exit).orEmpty()
         return listOf(
             normalized.bypassProvider,
             normalized.transport,
             normalized.id,
-            normalized.key
+            normalized.key,
+            exit,
         ).joinToString("|")
     }
 

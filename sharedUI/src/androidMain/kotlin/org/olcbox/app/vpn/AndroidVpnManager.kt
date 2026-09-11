@@ -504,6 +504,11 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
                         proxyNames = waiters.keys.toList(),
                         profileId = profileId,
                         mode = mode,
+                        onPartial = { name, value ->
+                            waiters[name]?.forEach { deferred ->
+                                deferred.complete(value)
+                            }
+                        },
                     )
                 }.onFailure {
                     android.util.Log.w("AndroidVpnManager", "mihomo batch ping failed: ${it.message}")

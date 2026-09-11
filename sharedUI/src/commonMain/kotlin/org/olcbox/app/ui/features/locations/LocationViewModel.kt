@@ -511,8 +511,9 @@ class LocationViewModel(
 
     private companion object {
         const val LOCATION_PING_ATTEMPTS = 1
-        // Enough for one full Mihomo probe batch; keep UI responsive.
-        const val LOCATION_PING_TIMEOUT_MS = 60_000L
+        // Per-node budget lives in MihomoProbe (~30s). UI must wait for late nodes
+        // in a large subscription without marking them Offline early.
+        const val LOCATION_PING_TIMEOUT_MS = 15 * 60_000L
         const val LOCATION_PING_RETRY_DELAY_MS = 0L
         // High enough that all Mihomo nodes can register into one probe batch
         // (regular + bypass). A low limit left bypass nodes for a 2nd wave that

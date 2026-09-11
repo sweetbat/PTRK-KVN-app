@@ -61,7 +61,7 @@ class MihomoProbeService : Service() {
             ?: "rule"
 
         scope.launch {
-            val delays = LinkedHashMap<String, Long>()
+            val delays = java.util.concurrent.ConcurrentHashMap<String, Long>()
             fun probeLog(msg: String) {
                 Log.i(TAG, msg)
                 runCatching {
@@ -97,6 +97,7 @@ class MihomoProbeService : Service() {
                     probeLog("missing in core (${missing.size}): ${missing.take(3).joinToString()}")
                 }
                 // Low concurrency: gRPC HTTP/2 dials fight each other in a cold core.
+                // Keep 2 in flight so UI can stream results without waiting for the whole list.
                 val gate = Semaphore(2)
                 coroutineScope {
                     proxies.map { proxyName ->
@@ -115,13 +116,22 @@ class MihomoProbeService : Service() {
                                     }.getOrNull()
                                     if (ms != null) probeLog("retry $proxyName -> $ms")
                                 }
-                                proxyName to (ms ?: -1L)
+                                val delayMs = ms ?: -1L
+                                delays[proxyName] = delayMs
+                                probeLog("$proxyName -> $delayMs")
+                                // Stream each node as soon as it finishes — UI should not wait
+                                // for the entire subscription batch.
+                                receiver?.send(
+                                    RESULT_PARTIAL,
+                                    Bundle().apply {
+                                        putString(EXTRA_RESULT_NAME, proxyName)
+                                        putLong(EXTRA_RESULT_MS, delayMs)
+                                    },
+                                )
+                                proxyName to delayMs
                             }
                         }
-                    }.awaitAll().forEach { (name, ms) ->
-                        delays[name] = ms
-                        probeLog("$name -> $ms")
-                    }
+                    }.awaitAll()
                 }
                 runCatching { MihomoEngine.stopListener() }
             }.onFailure {
@@ -138,13 +148,21 @@ class MihomoProbeService : Service() {
                 getSystemService(ConnectivityManager::class.java)?.bindProcessToNetwork(null)
             }
 
+            val ordered = LinkedHashMap<String, Long>()
+            proxies.forEach { name ->
+                delays[name]?.let { ordered[name] = it }
+            }
+            delays.forEach { (name, ms) ->
+                if (name !in ordered) ordered[name] = ms
+            }
+
             receiver?.send(
                 RESULT_OK,
                 Bundle().apply {
-                    putStringArrayList(EXTRA_RESULT_NAMES, ArrayList(delays.keys))
-                    putLongArray(EXTRA_RESULT_MS_ARRAY, delays.values.map { it }.toLongArray())
+                    putStringArrayList(EXTRA_RESULT_NAMES, ArrayList(ordered.keys))
+                    putLongArray(EXTRA_RESULT_MS_ARRAY, ordered.values.map { it }.toLongArray())
                     // Back-compat for single-proxy callers.
-                    putLong(EXTRA_RESULT_MS, delays.values.firstOrNull() ?: -1L)
+                    putLong(EXTRA_RESULT_MS, ordered.values.firstOrNull() ?: -1L)
                 },
             )
             stopSelf(startId)
@@ -206,17 +224,19 @@ class MihomoProbeService : Service() {
         const val EXTRA_PROFILE = "profile"
         const val EXTRA_MODE = "mode"
         const val EXTRA_RESULT_MS = "result_ms"
+        const val EXTRA_RESULT_NAME = "result_name"
         const val EXTRA_RESULT_NAMES = "result_names"
         const val EXTRA_RESULT_MS_ARRAY = "result_ms_array"
         const val RESULT_OK = 0
         const val RESULT_ERROR = 1
+        const val RESULT_PARTIAL = 2
 
         fun ping(
             context: Context,
             proxyName: String,
             profileId: String,
             mode: String,
-            timeoutMs: Long = 12_000L,
+            timeoutMs: Long = 35_000L,
         ): Long? {
             return pingMany(
                 context = context,
@@ -233,22 +253,47 @@ class MihomoProbeService : Service() {
             profileId: String,
             mode: String,
             timeoutMs: Long = 90_000L,
+            onPartial: ((proxyName: String, delayMs: Long?) -> Unit)? = null,
         ): Map<String, Long?> {
             val names = proxyNames.map { it.trim() }.filter { it.isNotBlank() }.distinct()
             if (names.isEmpty() || profileId.isBlank()) return emptyMap()
             val latch = CountDownLatch(1)
             val resultRef = AtomicReference<Map<String, Long?>>(emptyMap())
+            val progressive = LinkedHashMap<String, Long?>()
+            val progressiveLock = Any()
             val receiver = object : ResultReceiver(Handler(Looper.getMainLooper())) {
                 override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
-                    val keys = resultData?.getStringArrayList(EXTRA_RESULT_NAMES).orEmpty()
-                    val values = resultData?.getLongArray(EXTRA_RESULT_MS_ARRAY)
-                    val map = LinkedHashMap<String, Long?>()
-                    keys.forEachIndexed { index, key ->
-                        val raw = values?.getOrNull(index) ?: -1L
-                        map[key] = raw.takeIf { it >= 0L }
+                    when (resultCode) {
+                        RESULT_PARTIAL -> {
+                            val name = resultData?.getString(EXTRA_RESULT_NAME)?.trim().orEmpty()
+                            if (name.isEmpty()) return
+                            val raw = resultData?.getLong(EXTRA_RESULT_MS, -1L) ?: -1L
+                            val value = raw.takeIf { it >= 0L }
+                            synchronized(progressiveLock) {
+                                progressive[name] = value
+                                resultRef.set(LinkedHashMap(progressive))
+                            }
+                            onPartial?.invoke(name, value)
+                        }
+                        else -> {
+                            val keys = resultData?.getStringArrayList(EXTRA_RESULT_NAMES).orEmpty()
+                            val values = resultData?.getLongArray(EXTRA_RESULT_MS_ARRAY)
+                            val map = LinkedHashMap<String, Long?>()
+                            keys.forEachIndexed { index, key ->
+                                val raw = values?.getOrNull(index) ?: -1L
+                                map[key] = raw.takeIf { it >= 0L }
+                            }
+                            // Prefer progressive map if final bundle is empty/incomplete.
+                            val merged = synchronized(progressiveLock) {
+                                if (map.isNotEmpty()) {
+                                    progressive.putAll(map)
+                                }
+                                LinkedHashMap(progressive).ifEmpty { map }
+                            }
+                            resultRef.set(merged)
+                            latch.countDown()
+                        }
                     }
-                    resultRef.set(map)
-                    latch.countDown()
                 }
             }
             val intent = Intent(context, MihomoProbeService::class.java).apply {
@@ -261,8 +306,10 @@ class MihomoProbeService : Service() {
                 Log.e(TAG, "failed to start mihomo probe", it)
                 return emptyMap()
             }
-            // urlTest may retry a couple of URLs per leaf on cellular.
-            val budget = timeoutMs.coerceAtLeast(15_000L + names.size * 10_000L)
+            // ~30s overall budget per node, 2 in flight, plus cold setup headroom.
+            val budget = timeoutMs.coerceAtLeast(
+                20_000L + ((names.size + 1) / 2) * 32_000L,
+            )
             if (!latch.await(budget, TimeUnit.MILLISECONDS)) {
                 Log.w(TAG, "mihomo probe batch timed out")
                 return resultRef.get()

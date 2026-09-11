@@ -32,4 +32,29 @@ class PtrkSubscriptionCompanionTest {
         assertNull(PtrkSubscriptionCompanion.olcRtcCompanionUrl("https://example.com/mug/x"))
         assertTrue(PtrkSubscriptionCompanion.isOlcSubUrl("https://olcsub.ptrkkvn.beer/abc"))
     }
+
+    @Test
+    fun buildsExitRequestUrlFromOlcSubAndDrink() {
+        assertEquals(
+            "https://olcsub.ptrkkvn.beer/abc123/exit",
+            PtrkSubscriptionCompanion.exitRequestUrl("https://olcsub.ptrkkvn.beer/abc123"),
+        )
+        assertEquals(
+            "https://olcsub.ptrkkvn.beer/abc123/exit",
+            PtrkSubscriptionCompanion.exitRequestUrl("https://drink.ptrkkvn.beer/mug/abc123"),
+        )
+        assertEquals(
+            "https://olcsub.ptrkkvn.beer/abc123/exit",
+            PtrkSubscriptionCompanion.exitRequestUrl("https://olcsub.ptrkkvn.beer/abc123/exit"),
+        )
+        assertNull(PtrkSubscriptionCompanion.exitRequestUrl("https://example.com/sub"))
+    }
+
+    @Test
+    fun normalizesAllowedExits() {
+        assertEquals("pl", PtrkSubscriptionCompanion.normalizeExitCountry("PL"))
+        assertEquals("de", PtrkSubscriptionCompanion.normalizeExitCountry(" de "))
+        assertNull(PtrkSubscriptionCompanion.normalizeExitCountry("us"))
+        assertNull(PtrkSubscriptionCompanion.normalizeExitCountry(""))
+    }
 }
