@@ -20,11 +20,16 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import org.olcbox.app.i18n.AppLocale
+import org.olcbox.app.i18n.S
 import org.olcbox.app.update.AppUpdateInfo
+import org.olcbox.app.update.ReleaseChannel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -33,9 +38,13 @@ fun ApplicationUpdateOfferSheet(
     downloadProgress: Float?,
     onLater: () -> Unit,
     onDownload: () -> Unit,
-    downloadLabel: String = "Download"
+    downloadLabel: String? = null,
 ) {
+    val language by AppLocale.language.collectAsState()
+    @Suppress("UNUSED_EXPRESSION")
+    language
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val channelLabel = if (info.channel == ReleaseChannel.Nightly) S.channelBeta else S.channelStable
 
     ModalBottomSheet(
         onDismissRequest = onLater,
@@ -51,12 +60,12 @@ fun ApplicationUpdateOfferSheet(
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(
-                    text = "Update available",
+                    text = S.updateAvailable,
                     style = MaterialTheme.typography.headlineSmall,
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Text(
-                    text = "${info.channel.name} ${info.version}",
+                    text = "$channelLabel ${info.version}",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -78,13 +87,8 @@ fun ApplicationUpdateOfferSheet(
                         fontWeight = FontWeight.SemiBold,
                         fontSize = 15.sp
                     )
-                    Text(
-                        text = info.asset.sizeBytes?.formatBytes() ?: "Size unknown",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontSize = 13.sp
-                    )
                     if (downloadProgress != null) {
-                        Spacer(Modifier.height(4.dp))
+                        Spacer(modifier = Modifier.height(8.dp))
                         LinearProgressIndicator(
                             progress = { downloadProgress.coerceIn(0f, 1f) },
                             modifier = Modifier.fillMaxWidth()
@@ -93,31 +97,23 @@ fun ApplicationUpdateOfferSheet(
                 }
             }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
                 OutlinedButton(
                     onClick = onLater,
-                    modifier = Modifier.weight(1f),
-                    enabled = downloadProgress == null
+                    modifier = Modifier.weight(1f)
                 ) {
-                    Text("Later")
+                    Text(S.later)
                 }
                 Button(
                     onClick = onDownload,
-                    modifier = Modifier.weight(1f),
-                    enabled = downloadProgress == null
+                    modifier = Modifier.weight(1f)
                 ) {
-                    Text(downloadLabel)
+                    Text(downloadLabel ?: S.downloadUpdate)
                 }
             }
         }
-    }
-}
-
-private fun Long.formatBytes(): String {
-    val mb = this.toDouble() / (1024.0 * 1024.0)
-    return if (mb >= 1.0) {
-        "${(mb * 10).toInt() / 10.0} MB"
-    } else {
-        "${this / 1024L} KB"
     }
 }

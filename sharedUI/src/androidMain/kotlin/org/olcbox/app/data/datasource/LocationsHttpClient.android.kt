@@ -111,6 +111,9 @@ internal actual suspend fun downloadSubscriptionBodyDirect(
                     trafficAvailable = resp.subscriptionTraffic()?.second,
                     expireLabel = resp.subscriptionExpireLabel(),
                     updateIntervalMs = resp.profileUpdateIntervalMs(),
+                    announce = resp.subscriptionAnnounce(),
+                    supportUrl = resp.subscriptionSupportUrl(),
+                    webPageUrl = resp.subscriptionWebPageUrl(),
                 )
             }
         }
@@ -200,6 +203,31 @@ private fun Response.subscriptionExpireLabel(): String? {
 private fun Response.profileUpdateIntervalMs(): Long? {
     val hours = header("profile-update-interval")?.trim()?.toIntOrNull() ?: return null
     return hours.coerceIn(1, 168).toLong() * 60L * 60L * 1000L
+}
+
+private fun Response.subscriptionAnnounce(): String? {
+    val raw = header("announce")?.trim()?.ifBlank { null }
+        ?: header("profile-announce")?.trim()?.ifBlank { null }
+        ?: return null
+    if (raw.startsWith("base64:", ignoreCase = true)) {
+        val encoded = raw.substringAfter(':').filterNot { it.isWhitespace() }
+        return runCatching {
+            android.util.Base64.decode(encoded, android.util.Base64.DEFAULT)
+                .toString(Charsets.UTF_8)
+                .trim()
+                .ifBlank { null }
+        }.getOrNull() ?: raw.removePrefix("base64:").trim()
+    }
+    return raw
+}
+
+private fun Response.subscriptionSupportUrl(): String? {
+    return header("support-url")?.trim()?.takeIf { it.startsWith("http", ignoreCase = true) }
+}
+
+private fun Response.subscriptionWebPageUrl(): String? {
+    return header("profile-web-page-url")?.trim()?.takeIf { it.startsWith("http", ignoreCase = true) }
+        ?: header("website")?.trim()?.takeIf { it.startsWith("http", ignoreCase = true) }
 }
 
 private fun formatSubscriptionBytes(bytes: Long): String {

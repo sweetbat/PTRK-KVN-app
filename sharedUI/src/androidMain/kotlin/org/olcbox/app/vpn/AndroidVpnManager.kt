@@ -564,13 +564,24 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
             return null
         }
 
-        val proxy = _proxySettings.value
-        return SubscriptionFetchProxy(
-            host = AndroidSocksProxySettings.connectHost(proxy.host),
-            port = proxy.port,
-            username = proxy.username,
-            password = proxy.password
-        )
+        // UI process bypasses VpnService TUN — must hit the local engine SOCKS.
+        // Mihomo: hev dials Clash mixed-port 7890 (no auth).
+        // olcRTC: Mobile SOCKS on the configured listen port (with auth).
+        return when (readActiveEngine()) {
+            "mihomo" -> SubscriptionFetchProxy(
+                host = "127.0.0.1",
+                port = 7890,
+            )
+            else -> {
+                val proxy = _proxySettings.value
+                SubscriptionFetchProxy(
+                    host = AndroidSocksProxySettings.connectHost(proxy.host),
+                    port = proxy.port,
+                    username = proxy.username,
+                    password = proxy.password,
+                )
+            }
+        }
     }
 
     private suspend fun ensureProxySettings() {

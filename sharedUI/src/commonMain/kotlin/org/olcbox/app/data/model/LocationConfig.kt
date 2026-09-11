@@ -354,6 +354,14 @@ data class SubscriptionMetadata(
     val icon: String? = null,
     val used: String? = null,
     val available: String? = null,
+    /** Remnawave `announce` / panel description line. */
+    val announce: String? = null,
+    /** Remnawave `support-url` header. */
+    @SerialName("support_url")
+    val supportUrl: String? = null,
+    /** Remnawave `profile-web-page-url` header. */
+    @SerialName("web_page_url")
+    val webPageUrl: String? = null,
     @SerialName("update_interval_ms")
     val updateIntervalMs: Long? = null,
     @SerialName("manual_update_interval_ms")
@@ -382,6 +390,9 @@ data class SubscriptionMetadata(
             icon = icon.cleanMetadataValue(),
             used = used.cleanMetadataValue(),
             available = available.cleanMetadataValue(),
+            announce = announce.cleanMetadataValue(),
+            supportUrl = supportUrl.cleanMetadataValue(),
+            webPageUrl = webPageUrl.cleanMetadataValue(),
             updateIntervalMs = migratedInterval?.coerceIn(MIN_UPDATE_INTERVAL_MS, MAX_UPDATE_INTERVAL_MS),
             manualUpdateIntervalMs = manualUpdateIntervalMs?.coerceIn(
                 MIN_UPDATE_INTERVAL_MS,
@@ -398,9 +409,12 @@ data class SubscriptionMetadata(
     }
 
     fun displayDescription(): String? {
-        return description?.takeIf { it.isNotBlank() }
+        return announce?.takeIf { it.isNotBlank() }
+            ?: description?.takeIf { it.isNotBlank() && it !in setOf("∞", "\u221e") && !it.contains('.') }
             ?: comment?.takeIf { it.isNotBlank() && it !in INTERNAL_METADATA_COMMENTS }
     }
+
+    fun displayAnnounce(): String? = announce?.takeIf { it.isNotBlank() }
 
     fun effectiveUpdateIntervalMs(): Long {
         val normalized = normalized()
@@ -431,6 +445,9 @@ data class SubscriptionMetadata(
                 icon.isNullOrBlank() &&
                 used.isNullOrBlank() &&
                 available.isNullOrBlank() &&
+                announce.isNullOrBlank() &&
+                supportUrl.isNullOrBlank() &&
+                webPageUrl.isNullOrBlank() &&
                 updateIntervalMs == null &&
                 manualUpdateIntervalMs == null &&
                 !allowInsecureRequests &&
@@ -518,6 +535,8 @@ data class LocationMetadata(
     val mimo: String? = null,
     /** olcsub SOCKS exit country (`de` / `pl` / `fi`); same room+key, different exits. */
     val exit: String? = null,
+    /** Pipe-separated Clash leaf tags, e.g. `VLESS|GRPC|REALITY`. */
+    val protocol: String? = null,
     val subscription: SubscriptionMetadata? = null
 ) {
     fun normalized(): LocationMetadata {
@@ -535,6 +554,7 @@ data class LocationMetadata(
             comment = comment.cleanMetadataValue(),
             mimo = mimo.cleanMetadataValue(),
             exit = exit.cleanMetadataValue()?.lowercase(),
+            protocol = protocol.cleanMetadataValue(),
             subscription = normalizedSubscription
         )
     }
@@ -542,6 +562,14 @@ data class LocationMetadata(
     fun displayDescription(): String? {
         return description?.takeIf { it.isNotBlank() }
             ?: comment?.takeIf { it.isNotBlank() && it !in setOf("regular", "bypass") }
+    }
+
+    fun protocolTags(): List<String> {
+        return protocol
+            ?.split('|', ',', '·', '•')
+            ?.map { it.trim() }
+            ?.filter { it.isNotBlank() }
+            .orEmpty()
     }
 
     fun isEmpty(): Boolean {
@@ -555,6 +583,7 @@ data class LocationMetadata(
                 comment.isNullOrBlank() &&
                 mimo.isNullOrBlank() &&
                 exit.isNullOrBlank() &&
+                protocol.isNullOrBlank() &&
                 (subscription == null || subscription.isEmpty())
     }
 }

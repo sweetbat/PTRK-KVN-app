@@ -97,6 +97,130 @@ object ClashYaml {
         return "mh_" + (h.toUInt().toString(16))
     }
 
+    /**
+     * Best-effort leaf protocol tags for UI chips, e.g. `VLESS|GRPC|REALITY`.
+     * Looks up the named entry under the top-level `proxies:` section.
+     */
+    fun extractProxyProtocolTags(raw: String, proxyName: String): List<String> {
+        val text = decode(raw)
+        val target = proxyName.trim()
+        if (target.isEmpty()) return emptyList()
+        val lines = text.lineSequence().toList()
+        var i = 0
+        var inProxies = false
+        while (i < lines.size) {
+            val line = lines[i]
+            val trimmed = line.trimEnd()
+            if (!inProxies) {
+                if (trimmed == "proxies:" || trimmed.startsWith("proxies:")) {
+                    inProxies = true
+                }
+                i++
+                continue
+            }
+            val indent = line.length - line.trimStart().length
+            val body = line.trim()
+            if (body.isNotEmpty() && indent == 0 && topLevelKey.containsMatchIn(body) &&
+                !body.startsWith("-") && !body.startsWith("#")
+            ) {
+                break
+            }
+            val nameMatch = Regex("""^\s*-\s*name:\s*(.+)\s*$""").matchEntire(line)
+                ?: Regex("""^\s*name:\s*(.+)\s*$""").matchEntire(line)?.takeIf {
+                    // flow-style / nested name inside an already-started dash item
+                    i > 0 && lines[i - 1].trimStart().startsWith("-")
+                }
+            if (nameMatch != null && unquote(nameMatch.groupValues[1]) == target) {
+                val fields = linkedMapOf<String, String>()
+                // Inline `- { name: X, type: vless, ... }`
+                if (body.contains('{') && body.contains('}')) {
+                    Regex("""(\w[\w-]*)\s*:\s*([^,}]+)""")
+                        .findAll(body)
+                        .forEach { m ->
+                            fields[m.groupValues[1].lowercase()] = unquote(m.groupValues[2])
+                        }
+                } else {
+                    var j = i + 1
+                    while (j < lines.size) {
+                        val next = lines[j]
+                        val nextTrim = next.trim()
+                        val nextIndent = next.length - next.trimStart().length
+                        if (nextTrim.startsWith("- ") && nextIndent <= indent) break
+                        if (nextTrim.isNotEmpty() && nextIndent == 0 &&
+                            topLevelKey.containsMatchIn(nextTrim)
+                        ) break
+                        val kv = Regex("""^\s*([A-Za-z0-9_-]+)\s*:\s*(.*)$""").matchEntire(next)
+                        if (kv != null) {
+                            val key = kv.groupValues[1].lowercase()
+                            val value = unquote(kv.groupValues[2])
+                            if (value.isNotBlank() && value != "|" && value != ">") {
+                                fields[key] = value
+                            } else if (key == "reality-opts" || key == "ws-opts" ||
+                                key == "grpc-opts" || key == "smux"
+                            ) {
+                                fields[key] = "present"
+                            }
+                        }
+                        j++
+                    }
+                }
+                return buildProtocolTags(fields)
+            }
+            i++
+        }
+        return emptyList()
+    }
+
+    private fun buildProtocolTags(fields: Map<String, String>): List<String> {
+        val tags = mutableListOf<String>()
+        fun add(tag: String?) {
+            val t = tag?.trim()?.uppercase()?.takeIf { it.isNotBlank() } ?: return
+            if (t !in tags) tags += t
+        }
+        when (val type = fields["type"]?.lowercase()) {
+            "vless" -> add("VLESS")
+            "vmess" -> add("VMESS")
+            "trojan" -> add("TROJAN")
+            "ss", "shadowsocks" -> add("SS")
+            "hysteria" -> add("HYSTERIA")
+            "hysteria2", "hy2" -> add("HYSTERIA2")
+            "tuic" -> add("TUIC")
+            "wireguard" -> add("WIREGUARD")
+            "anytls" -> add("ANYTLS")
+            null, "" -> Unit
+            else -> add(type.uppercase())
+        }
+        val network = fields["network"]?.lowercase()
+        when (network) {
+            "grpc" -> add("GRPC")
+            "ws", "websocket" -> add("WS")
+            "http" -> add("HTTP")
+            "h2", "http2" -> add("H2")
+            "tcp" -> add("TCP")
+            "udp" -> add("UDP")
+            "xhttp", "httpupgrade" -> add("JSON")
+            null, "" -> Unit
+            else -> add(network.uppercase())
+        }
+        if (fields.containsKey("reality-opts") ||
+            fields["reality"]?.equals("true", true) == true ||
+            fields["client-fingerprint"] != null && fields["public-key"] != null
+        ) {
+            add("REALITY")
+        } else when (fields["tls"]?.lowercase()) {
+            "true", "1", "tls" -> add("TLS")
+            else -> if (fields["security"]?.equals("tls", true) == true) add("TLS")
+        }
+        fields["flow"]?.takeIf { it.contains("vision", ignoreCase = true) }?.let { add("VISION") }
+        if (fields["packet-encoding"] != null ||
+            fields["xmux"] != null ||
+            network == "xhttp"
+        ) {
+            add("JSON")
+        }
+        return tags
+    }
+
     private data class ProxyGroup(val name: String, val members: List<String>)
 
     private fun extractProxyGroups(text: String): List<ProxyGroup> {

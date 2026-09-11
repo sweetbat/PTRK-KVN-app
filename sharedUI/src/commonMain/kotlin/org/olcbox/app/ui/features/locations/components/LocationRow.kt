@@ -12,6 +12,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -53,6 +54,7 @@ import org.olcbox.app.ui.components.TrafficQuotaIndicator
 import org.olcbox.app.ui.features.locations.LocationItem
 import org.olcbox.app.util.normalizeFlagToken
 import org.olcbox.app.util.parseEmojiAndName
+import androidx.compose.foundation.background
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -136,7 +138,11 @@ fun LocationRow(
                 overflow = TextOverflow.Ellipsis
             )
 
-            if (!description.isNullOrBlank()) {
+            val protocolTags = metadata?.protocolTags().orEmpty()
+            if (protocolTags.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(6.dp))
+                ProtocolTagRow(tags = protocolTags)
+            } else if (!description.isNullOrBlank()) {
                 Text(
                     text = description,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -146,13 +152,15 @@ fun LocationRow(
                 )
             }
 
-            Text(
-                text = locationSubtitle(location),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontSize = 12.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
+            if (protocolTags.isEmpty()) {
+                Text(
+                    text = locationSubtitle(location),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
 
             TrafficQuotaIndicator(
                 used = metadata?.used,
@@ -211,6 +219,8 @@ private fun locationSubtitle(location: LocationItem): String {
     val config = location.config
     val metadata = location.metadata
     if (config?.isMihomo() == true) {
+        val tags = metadata?.protocolTags().orEmpty()
+        if (tags.isNotEmpty()) return tags.joinToString(" · ")
         return S.mihomoEngine
     }
 
@@ -226,6 +236,49 @@ private fun locationSubtitle(location: LocationItem): String {
         quotaText(metadata?.used, metadata?.available)
             .takeUnless { parseTrafficQuota(metadata?.used, metadata?.available) != null }
     ).joinToString(" · ")
+}
+
+@Composable
+private fun ProtocolTagRow(tags: List<String>) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        tags.take(5).forEach { tag ->
+            val colors = protocolTagColors(tag)
+            Text(
+                text = tag,
+                color = colors.first,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(colors.second)
+                    .padding(horizontal = 7.dp, vertical = 3.dp)
+            )
+        }
+    }
+}
+
+private fun protocolTagColors(tag: String): Pair<Color, Color> {
+    val key = tag.trim().uppercase()
+    val bg = when (key) {
+        "VLESS" -> Color(0xFF1E5AA8)
+        "VMESS" -> Color(0xFF2563EB)
+        "HYSTERIA2", "HYSTERIA", "HY2" -> Color(0xFF0F766E)
+        "JSON", "XHTTP" -> Color(0xFFB45309)
+        "TROJAN" -> Color(0xFF6D28D9)
+        "SS", "SHADOWSOCKS" -> Color(0xFFC2410C)
+        "TUIC" -> Color(0xFF047857)
+        "GRPC" -> Color(0xFF334155)
+        "WS", "HTTP", "TCP", "UDP", "H2", "HTTPUPGRADE" -> Color(0xFF475569)
+        "REALITY" -> Color(0xFF1D4ED8)
+        "TLS", "VISION" -> Color(0xFF0F766E)
+        else -> Color(0xFF64748B)
+    }
+    return Color.White to bg
 }
 
 private fun quotaText(used: String?, available: String?): String? {

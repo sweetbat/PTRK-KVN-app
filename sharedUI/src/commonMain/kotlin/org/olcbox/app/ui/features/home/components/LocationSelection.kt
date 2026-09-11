@@ -73,68 +73,129 @@ fun LocationSelectorScreen(
 
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             subscriptionGroups.forEach { group ->
-                Column(
-                    modifier = Modifier.fillMaxWidth()
+                val subscription = group.firstOrNull()?.metadata?.subscription
+                val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(20.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.55f),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f)),
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        SubscriptionGroupHeader(
-                            locations = group,
-                            modifier = Modifier.weight(1f)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            SubscriptionGroupHeader(
+                                locations = group,
+                                modifier = Modifier.weight(1f)
+                            )
+
+                            val groupIds = group.map { it.storageId }
+                            val isGroupRefreshing = pingsState is PingsState.Loading &&
+                                    pingsState.pendingLocationIds.any { it in groupIds }
+
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                RefreshButton(
+                                    isRefreshing = isGroupRefreshing,
+                                    onClick = { onRefreshClick(groupIds) },
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    label = org.olcbox.app.i18n.S.ping,
+                                    icon = Icons.Outlined.Bolt,
+                                    enabled = updatingSubscriptionUrl == null
+                                )
+
+                                group.firstOrNull()
+                                    ?.subscriptionUrl
+                                    ?.trim()
+                                    ?.takeIf { it.isNotBlank() }
+                                    ?.let { subscriptionUrl ->
+                                        RefreshButton(
+                                            isRefreshing = updatingSubscriptionUrl == subscriptionUrl,
+                                            onClick = { onSubscriptionUpdateClick(subscriptionUrl) },
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            label = org.olcbox.app.i18n.S.update,
+                                            icon = Icons.Outlined.Refresh,
+                                            enabled = updatingSubscriptionUrl == null && !isGroupRefreshing
+                                        )
+                                    }
+                            }
+                        }
+
+                        TrafficQuotaIndicator(
+                            used = subscription?.used,
+                            available = subscription?.available,
+                            modifier = Modifier.padding(horizontal = 4.dp)
                         )
 
-                        val groupIds = group.map { it.storageId }
-                        val isGroupRefreshing = pingsState is PingsState.Loading &&
-                                pingsState.pendingLocationIds.any { it in groupIds }
-
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            RefreshButton(
-                                isRefreshing = isGroupRefreshing,
-                                onClick = { onRefreshClick(groupIds) },
-                                tint = MaterialTheme.colorScheme.primary,
-                                label = org.olcbox.app.i18n.S.ping,
-                                icon = Icons.Outlined.Bolt,
-                                enabled = updatingSubscriptionUrl == null
+                        val announce = subscription?.displayAnnounce()
+                        if (!announce.isNullOrBlank()) {
+                            Text(
+                                text = announce,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 3,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(horizontal = 4.dp),
                             )
-
-                            group.firstOrNull()
-                                ?.subscriptionUrl
-                                ?.trim()
-                                ?.takeIf { it.isNotBlank() }
-                                ?.let { subscriptionUrl ->
-                                    RefreshButton(
-                                        isRefreshing = updatingSubscriptionUrl == subscriptionUrl,
-                                        onClick = { onSubscriptionUpdateClick(subscriptionUrl) },
-                                        tint = MaterialTheme.colorScheme.primary,
-                                        label = org.olcbox.app.i18n.S.update,
-                                        icon = Icons.Outlined.Refresh,
-                                        enabled = updatingSubscriptionUrl == null && !isGroupRefreshing
-                                    )
-                                }
                         }
-                    }
 
-                    val subscription = group.firstOrNull()?.metadata?.subscription
-                    TrafficQuotaIndicator(
-                        used = subscription?.used,
-                        available = subscription?.available,
-                        modifier = Modifier.padding(start = 4.dp, end = 4.dp, bottom = 8.dp)
-                    )
+                        val supportUrl = subscription?.supportUrl
+                        val webPageUrl = subscription?.webPageUrl
+                        if (!supportUrl.isNullOrBlank() || !webPageUrl.isNullOrBlank()) {
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.padding(horizontal = 4.dp),
+                            ) {
+                                if (!supportUrl.isNullOrBlank()) {
+                                    Surface(
+                                        shape = RoundedCornerShape(999.dp),
+                                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                                        onClick = { runCatching { uriHandler.openUri(supportUrl) } },
+                                    ) {
+                                        Text(
+                                            text = org.olcbox.app.i18n.S.support,
+                                            color = MaterialTheme.colorScheme.primary,
+                                            style = MaterialTheme.typography.labelLarge,
+                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                        )
+                                    }
+                                }
+                                if (!webPageUrl.isNullOrBlank()) {
+                                    Surface(
+                                        shape = RoundedCornerShape(999.dp),
+                                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                                        onClick = { runCatching { uriHandler.openUri(webPageUrl) } },
+                                    ) {
+                                        Text(
+                                            text = org.olcbox.app.i18n.S.website,
+                                            color = MaterialTheme.colorScheme.primary,
+                                            style = MaterialTheme.typography.labelLarge,
+                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                        )
+                                    }
+                                }
+                            }
+                        }
 
-                    Column(
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        group.forEach { location ->
-                            LocationSelectorRow(
-                                location = location,
-                                selectedLocationId = selectedLocationId,
-                                pingsState = pingsState,
-                                onLocationSelected = onLocationSelected,
-                                onLocationSettingsClick = onLocationSettingsClick
-                            )
+                        Column(
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            group.forEach { location ->
+                                LocationSelectorRow(
+                                    location = location,
+                                    selectedLocationId = selectedLocationId,
+                                    pingsState = pingsState,
+                                    onLocationSelected = onLocationSelected,
+                                    onLocationSettingsClick = onLocationSettingsClick
+                                )
+                            }
                         }
                     }
                 }

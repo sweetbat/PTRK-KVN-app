@@ -68,6 +68,9 @@ internal data class DirectSubscriptionDownload(
     val trafficAvailable: String? = null,
     val expireLabel: String? = null,
     val updateIntervalMs: Long? = null,
+    val announce: String? = null,
+    val supportUrl: String? = null,
+    val webPageUrl: String? = null,
 )
 
 internal expect suspend fun downloadSubscriptionBodyDirect(
@@ -107,6 +110,9 @@ class LocationsRepositoryImpl(
         val trafficUsed: String? = null,
         val trafficAvailable: String? = null,
         val expireLabel: String? = null,
+        val announce: String? = null,
+        val supportUrl: String? = null,
+        val webPageUrl: String? = null,
     )
 
     private data class DownloadedSubscription(
@@ -116,6 +122,9 @@ class LocationsRepositoryImpl(
         val trafficUsed: String? = null,
         val trafficAvailable: String? = null,
         val expireLabel: String? = null,
+        val announce: String? = null,
+        val supportUrl: String? = null,
+        val webPageUrl: String? = null,
     )
 
     private data class ParsedImport(
@@ -692,6 +701,9 @@ class LocationsRepositoryImpl(
                         used = source.trafficUsed ?: existing.used,
                         available = source.trafficAvailable ?: existing.available,
                         description = source.expireLabel ?: existing.description,
+                        announce = source.announce ?: existing.announce,
+                        supportUrl = source.supportUrl ?: existing.supportUrl,
+                        webPageUrl = source.webPageUrl ?: existing.webPageUrl,
                     ).normalized()
                     entry.copy(
                         metadata = (entry.metadata ?: LocationMetadata())
@@ -743,6 +755,9 @@ class LocationsRepositoryImpl(
                         trafficUsed = downloaded.value.trafficUsed,
                         trafficAvailable = downloaded.value.trafficAvailable,
                         expireLabel = downloaded.value.expireLabel,
+                        announce = downloaded.value.announce,
+                        supportUrl = downloaded.value.supportUrl,
+                        webPageUrl = downloaded.value.webPageUrl,
                     )
                 )
             }
@@ -811,6 +826,9 @@ class LocationsRepositoryImpl(
                         trafficUsed = content.trafficUsed,
                         trafficAvailable = content.trafficAvailable,
                         expireLabel = content.expireLabel,
+                        announce = content.announce,
+                        supportUrl = content.supportUrl,
+                        webPageUrl = content.webPageUrl,
                     )
                 )
             }
@@ -1050,6 +1068,9 @@ class LocationsRepositoryImpl(
                 .trim('-')
                 .ifBlank { "node" }
             val storageId = uniqueStorageId(base, used)
+            val protocol = ClashYaml.extractProxyProtocolTags(decoded, proxyName)
+                .joinToString("|")
+                .ifBlank { null }
             return LocationEntry.mihomo(
                 storageId = storageId,
                 proxyName = proxyName,
@@ -1057,6 +1078,7 @@ class LocationsRepositoryImpl(
                 subscriptionUrl = subscriptionUrl,
                 displayName = proxyName,
                 metadata = meta.copy(
+                    protocol = protocol,
                     subscription = meta.subscription?.copy(
                         comment = if (bypass) "bypass" else "regular"
                     )

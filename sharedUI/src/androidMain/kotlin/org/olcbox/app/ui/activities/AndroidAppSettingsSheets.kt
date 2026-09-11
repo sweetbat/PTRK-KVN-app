@@ -1259,6 +1259,17 @@ private fun UpdatesSettingsContent(
 
         Spacer(Modifier.height(18.dp))
 
+        SettingsSwitchRow(
+            title = S.seekBeta,
+            value = if (settings.seeksBeta) S.betaEnabled else S.betaDisabled,
+            icon = Icons.Outlined.Refresh,
+            checked = settings.seeksBeta,
+            enabled = true,
+            onCheckedChange = onBetaChannelChanged,
+        )
+
+        Spacer(Modifier.height(18.dp))
+
         Surface(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(18.dp),
@@ -1277,6 +1288,12 @@ private fun UpdatesSettingsContent(
                 )
                 Text(
                     text = settings.lastCheckAtEpochMs?.formatDateTime() ?: S.notCheckedYet,
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Text(
+                    text = S.updateChannelSummary(settings.seeksBeta, settings.intervalHours),
                     fontSize = 13.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

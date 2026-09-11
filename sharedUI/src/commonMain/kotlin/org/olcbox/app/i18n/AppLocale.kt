@@ -61,6 +61,18 @@ object S {
     val disconnected get() = if (ru) "\u041e\u0442\u043a\u043b\u044e\u0447\u0435\u043d\u043e" else "Disconnected"
 
     val subscription get() = if (ru) "\u041f\u043e\u0434\u043f\u0438\u0441\u043a\u0430" else "Subscription"
+    val selectedSubscription get() =
+        if (ru) "\u0412\u044b\u0431\u0440\u0430\u043d\u043d\u0430\u044f \u043f\u043e\u0434\u043f\u0438\u0441\u043a\u0430" else "Selected subscription"
+    val support get() =
+        if (ru) "\u041f\u043e\u0434\u0434\u0435\u0440\u0436\u043a\u0430" else "Support"
+    val website get() =
+        if (ru) "\u0421\u0430\u0439\u0442" else "Website"
+    val updateAvailable get() =
+        if (ru) "\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u043e \u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u0435" else "Update available"
+    val downloadUpdate get() =
+        if (ru) "\u0421\u043a\u0430\u0447\u0430\u0442\u044c" else "Download"
+    val later get() =
+        if (ru) "\u041f\u043e\u0437\u0436\u0435" else "Later"
     val updateSubscription get() =
         if (ru) "\u041e\u0431\u043d\u043e\u0432\u0438\u0442\u044c \u043f\u043e\u0434\u043f\u0438\u0441\u043a\u0443" else "Update subscription"
     val subscriptionUpdated get() =
