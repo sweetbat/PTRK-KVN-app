@@ -852,7 +852,8 @@ class LocationsRepositoryImpl(
                     remove(HttpHeaders.UserAgent)
                     append(HttpHeaders.UserAgent, org.olcbox.app.data.identity.RemnawaveDeviceIdentity.userAgent())
                     append("x-device-os", "Android")
-                    append("x-device-model", org.olcbox.app.data.identity.RemnawaveDeviceIdentity.MODEL)
+                    append("x-ver-os", org.olcbox.app.data.identity.RemnawaveDeviceIdentity.osVersion())
+                    append("x-device-model", org.olcbox.app.data.identity.RemnawaveDeviceIdentity.deviceModel())
                     if (!hwid.isNullOrBlank()) append("x-hwid", hwid)
                 }
             }
@@ -881,10 +882,11 @@ class LocationsRepositoryImpl(
         fun usable(text: String): Boolean =
             ClashYaml.looksLikeClash(text) || text.contains("olcrtc://", ignoreCase = true)
 
-        if (usable(initial)) return initial
-
-        val agents = listOf(
-            org.olcbox.app.data.identity.RemnawaveDeviceIdentity.userAgent(),
+        val identity = org.olcbox.app.data.identity.RemnawaveDeviceIdentity
+        val deviceModel = identity.deviceModel()
+        val osVersion = identity.osVersion()
+        val appAgent = identity.userAgent()
+        val yamlAgents = listOf(
             "ClashMeta/1.19.0",
             "clash.meta/v1.19.0",
             "mihomo/1.19.0",
@@ -898,44 +900,41 @@ class LocationsRepositoryImpl(
             add(url)
         }.distinct()
 
-        for (candidateUrl in urlVariants) {
-            for (agent in agents) {
-                val body = runCatching {
-                    client.get(candidateUrl) {
-                        headers {
-                            append(HttpHeaders.Accept, "text/yaml, */*")
-                            remove(HttpHeaders.UserAgent)
-                            append(HttpHeaders.UserAgent, agent)
-                            append("x-device-os", "Android")
-                            append("x-device-model", org.olcbox.app.data.identity.RemnawaveDeviceIdentity.MODEL)
-                            if (!hwid.isNullOrBlank()) append("x-hwid", hwid)
-                        }
-                    }.bodyAsText()
-                }.getOrNull() ?: continue
-                if (usable(body)) return body
+        suspend fun getBody(candidateUrl: String, agent: String, includeHwid: Boolean): String? =
+            runCatching {
+                client.get(candidateUrl) {
+                    headers {
+                        append(HttpHeaders.Accept, "text/yaml, */*")
+                        remove(HttpHeaders.UserAgent)
+                        append(HttpHeaders.UserAgent, agent)
+                        append("x-device-os", "Android")
+                        append("x-ver-os", osVersion)
+                        append("x-device-model", deviceModel)
+                        if (includeHwid && !hwid.isNullOrBlank()) append("x-hwid", hwid)
+                    }
+                }.bodyAsText()
+            }.getOrNull()
+
+        var yaml = initial.takeIf(::usable)
+        if (yaml == null) {
+            for (candidateUrl in urlVariants) {
+                for (agent in yamlAgents) {
+                    val body = getBody(candidateUrl, agent, includeHwid = false) ?: continue
+                    if (usable(body)) {
+                        yaml = body
+                        break
+                    }
+                }
+                if (yaml != null) break
             }
         }
 
-        // Last resort: no hwid (some panels reject unknown devices with a URI dump).
+        // Touch with PTRK User-Agent so Remnawave HWID shows PTRK-KVN-app/<ver> + phone model.
         if (!hwid.isNullOrBlank()) {
-            for (candidateUrl in urlVariants) {
-                for (agent in agents) {
-                    val body = runCatching {
-                        client.get(candidateUrl) {
-                            headers {
-                                append(HttpHeaders.Accept, "text/yaml, */*")
-                                remove(HttpHeaders.UserAgent)
-                                append(HttpHeaders.UserAgent, agent)
-                                append("x-device-os", "Android")
-                                append("x-device-model", org.olcbox.app.data.identity.RemnawaveDeviceIdentity.MODEL)
-                            }
-                        }.bodyAsText()
-                    }.getOrNull()
-                    if (body != null && usable(body)) return body
-                }
-            }
+            getBody(urlVariants.first(), appAgent, includeHwid = true)
         }
-        return initial
+
+        return yaml ?: initial
     }
 
     private fun String.isHttpUrl(): Boolean {

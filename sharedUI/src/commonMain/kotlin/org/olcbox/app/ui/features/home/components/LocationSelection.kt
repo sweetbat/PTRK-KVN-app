@@ -459,31 +459,29 @@ private fun SubscriptionInfoPanel(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 if (!supportUrl.isNullOrBlank()) {
-                    SubscriptionInfoFrame(
-                        label = org.olcbox.app.i18n.S.support,
-                        modifier = Modifier.weight(1f),
+                    FilledTonalButton(
                         onClick = { runCatching { uriHandler.openUri(supportUrl) } },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(14.dp),
                     ) {
                         Text(
-                            text = prettyUrlLabel(supportUrl),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.primary,
-                            maxLines = 2,
+                            text = org.olcbox.app.i18n.S.support,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
                     }
                 }
                 if (!webPageUrl.isNullOrBlank()) {
-                    SubscriptionInfoFrame(
-                        label = org.olcbox.app.i18n.S.website,
-                        modifier = Modifier.weight(1f),
+                    FilledTonalButton(
                         onClick = { runCatching { uriHandler.openUri(webPageUrl) } },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(14.dp),
                     ) {
                         Text(
-                            text = prettyUrlLabel(webPageUrl),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.primary,
-                            maxLines = 2,
+                            text = org.olcbox.app.i18n.S.website,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
                     }
@@ -493,14 +491,7 @@ private fun SubscriptionInfoPanel(
     }
 }
 
-private fun prettyUrlLabel(url: String): String {
-    return url
-        .removePrefix("https://")
-        .removePrefix("http://")
-        .removePrefix("tg://")
-        .trimEnd('/')
-        .ifBlank { url }
-}
+
 
 @Composable
 private fun SubscriptionInfoFrame(

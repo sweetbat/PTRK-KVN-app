@@ -1,6 +1,5 @@
 package org.olcbox.app.data.datasource
 
-import android.os.Build
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.ProxyBuilder
 import io.ktor.client.engine.okhttp.OkHttp
@@ -86,15 +85,21 @@ internal actual suspend fun downloadSubscriptionBodyDirect(
         }
 
         val appAgent = RemnawaveDeviceIdentity.userAgent()
+        val deviceModel = RemnawaveDeviceIdentity.deviceModel()
+        val osVersion = RemnawaveDeviceIdentity.osVersion()
 
-        fun fetch(target: String, agent: String, includeHwid: Boolean): DirectSubscriptionDownload? {
+        fun fetch(
+            target: String,
+            agent: String,
+            includeHwid: Boolean,
+        ): DirectSubscriptionDownload? {
             val builder = Request.Builder()
                 .url(target)
                 .header("User-Agent", agent)
                 .header("Accept", "text/yaml, text/plain, application/octet-stream, */*")
                 .header("x-device-os", "Android")
-                .header("x-ver-os", Build.VERSION.RELEASE ?: "unknown")
-                .header("x-device-model", RemnawaveDeviceIdentity.MODEL)
+                .header("x-ver-os", osVersion)
+                .header("x-device-model", deviceModel)
             if (includeHwid && !hwid.isNullOrBlank()) {
                 builder.header("x-hwid", hwid)
             }
@@ -104,10 +109,8 @@ internal actual suspend fun downloadSubscriptionBodyDirect(
                 val body = resp.body?.string()?.takeIf { it.isNotBlank() } ?: return null
                 android.util.Log.i(
                     "SubDownload",
-                    "ua=$agent code=${resp.code} len=${body.length} " +
-                        "ctype=${resp.header("Content-Type")} " +
-                        "title=${resp.header("profile-title")} " +
-                        "clash=${usable(body)}"
+                    "ua=$agent model=$deviceModel os=$osVersion hwid=${includeHwid && !hwid.isNullOrBlank()} " +
+                        "code=${resp.code} len=${body.length} clash=${usable(body)}"
                 )
                 return DirectSubscriptionDownload(
                     content = body,
@@ -123,10 +126,13 @@ internal actual suspend fun downloadSubscriptionBodyDirect(
             }
         }
 
-        // Remnawave: PTRK-KVN-app UA → base64 URI dump; ClashMeta/mihomo → Clash YAML.
-        // Keep x-device-model=PTRK-KVN-app for HWID labeling; fall back UA for YAML body.
+        // Remnawave picks body format from User-Agent:
+        //   PTRK-KVN-app/* → base64 URI dump
+        //   ClashMeta/mihomo → Clash YAML
+        // HWID table shows the last request's UA + x-device-model, so:
+        //   1) pull YAML with ClashMeta (no HWID)
+        //   2) touch with PTRK UA + real model + HWID to register identity
         val yamlAgents = listOf(
-            appAgent,
             "ClashMeta/1.19.0",
             "clash.meta/v1.19.0",
             "mihomo/1.19.0",
@@ -140,11 +146,11 @@ internal actual suspend fun downloadSubscriptionBodyDirect(
             url,
         ).distinct()
 
-        fun firstUsable(includeHwid: Boolean): DirectSubscriptionDownload? {
+        fun firstYaml(): DirectSubscriptionDownload? {
             for (candidate in urls) {
                 for (agent in yamlAgents) {
                     val downloaded = runCatching {
-                        fetch(candidate, agent, includeHwid = includeHwid)
+                        fetch(candidate, agent, includeHwid = false)
                     }.getOrNull()
                     if (downloaded != null && usable(downloaded.content)) return downloaded
                 }
@@ -152,15 +158,20 @@ internal actual suspend fun downloadSubscriptionBodyDirect(
             return null
         }
 
-        firstUsable(includeHwid = true)?.let { return@withContext it }
+        val yaml = firstYaml()
+            ?: runCatching { fetch(urls.first(), "ClashMeta/1.19.0", includeHwid = false) }.getOrNull()
+            ?: runCatching { fetch(urls.first(), appAgent, includeHwid = false) }.getOrNull()
+            ?: error("Subscription server returned an empty response")
+
         if (!hwid.isNullOrBlank()) {
-            firstUsable(includeHwid = false)?.let { return@withContext it }
+            // Register / refresh HWID row with the required PTRK User-Agent + phone model.
+            runCatching {
+                fetch(urls.first(), appAgent, includeHwid = true)
+            }
         }
 
-        // Last resort: return whatever we got (caller will show a clear error).
-        fetch(urls.first(), "ClashMeta/1.19.0", includeHwid = !hwid.isNullOrBlank())
-            ?: fetch(urls.first(), appAgent, includeHwid = !hwid.isNullOrBlank())
-            ?: error("Subscription server returned an empty response")
+        // Prefer metadata from YAML response (same Remnawave headers either way).
+        yaml
     } finally {
         client.dispatcher.executorService.shutdown()
         client.connectionPool.evictAll()
@@ -312,10 +323,10 @@ private fun buildSubscriptionOkHttpClient(
                     next.header("x-device-os", "Android")
                 }
                 if (original.header("x-ver-os").isNullOrBlank()) {
-                    next.header("x-ver-os", Build.VERSION.RELEASE ?: "unknown")
+                    next.header("x-ver-os", RemnawaveDeviceIdentity.osVersion())
                 }
                 if (original.header("x-device-model").isNullOrBlank()) {
-                    next.header("x-device-model", RemnawaveDeviceIdentity.MODEL)
+                    next.header("x-device-model", RemnawaveDeviceIdentity.deviceModel())
                 }
             }
             chain.proceed(next.build())
