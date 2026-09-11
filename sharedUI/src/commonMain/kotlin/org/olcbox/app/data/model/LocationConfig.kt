@@ -600,9 +600,26 @@ data class LocationMetadata(
                 looksBypassXhttp
             if (looksXhttp) {
                 add("XHTTP")
+                add("TLS")
                 add("JSON")
             }
-            return out
+            return orderProtocolTags(out)
+        }
+
+        /** Protocol → transport (XHTTP) → security (TLS) → JSON. */
+        fun orderProtocolTags(tags: List<String>): List<String> {
+            val rank = mapOf(
+                "VLESS" to 10, "VMESS" to 11, "TROJAN" to 12, "SS" to 13, "SHADOWSOCKS" to 13,
+                "HYSTERIA2" to 14, "HY2" to 14, "HYSTERIA" to 15, "TUIC" to 16,
+                "WIREGUARD" to 17, "ANYTLS" to 18,
+                "GRPC" to 30, "WS" to 31, "XHTTP" to 32, "HTTPUPGRADE" to 33,
+                "H2" to 34, "HTTP" to 35, "TCP" to 36, "UDP" to 37,
+                "REALITY" to 50, "TLS" to 51, "VISION" to 52,
+                "JSON" to 90,
+            )
+            return tags.distinct().sortedWith(
+                compareBy<String> { rank[it] ?: 80 }.thenBy { it }
+            )
         }
     }
 

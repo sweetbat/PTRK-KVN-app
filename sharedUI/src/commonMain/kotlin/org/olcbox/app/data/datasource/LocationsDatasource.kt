@@ -885,6 +885,11 @@ class LocationsRepositoryImpl(
 
         val agents = listOf(
             org.olcbox.app.data.identity.RemnawaveDeviceIdentity.userAgent(),
+            "ClashMeta/1.19.0",
+            "clash.meta/v1.19.0",
+            "mihomo/1.19.0",
+            "clash-verge",
+            "Clash",
         )
         val urlVariants = buildList {
             val joiner = if ('?' in url) "&" else "?"
@@ -914,21 +919,20 @@ class LocationsRepositoryImpl(
         // Last resort: no hwid (some panels reject unknown devices with a URI dump).
         if (!hwid.isNullOrBlank()) {
             for (candidateUrl in urlVariants) {
-                val body = runCatching {
-                    client.get(candidateUrl) {
-                        headers {
-                            append(HttpHeaders.Accept, "text/yaml, */*")
-                            remove(HttpHeaders.UserAgent)
-                            append(
-                                HttpHeaders.UserAgent,
-                                org.olcbox.app.data.identity.RemnawaveDeviceIdentity.userAgent(),
-                            )
-                            append("x-device-os", "Android")
-                            append("x-device-model", org.olcbox.app.data.identity.RemnawaveDeviceIdentity.MODEL)
-                        }
-                    }.bodyAsText()
-                }.getOrNull()
-                if (body != null && usable(body)) return body
+                for (agent in agents) {
+                    val body = runCatching {
+                        client.get(candidateUrl) {
+                            headers {
+                                append(HttpHeaders.Accept, "text/yaml, */*")
+                                remove(HttpHeaders.UserAgent)
+                                append(HttpHeaders.UserAgent, agent)
+                                append("x-device-os", "Android")
+                                append("x-device-model", org.olcbox.app.data.identity.RemnawaveDeviceIdentity.MODEL)
+                            }
+                        }.bodyAsText()
+                    }.getOrNull()
+                    if (body != null && usable(body)) return body
+                }
             }
         }
         return initial

@@ -302,17 +302,13 @@ object ClashYaml {
             "h2", "http2" -> add("H2")
             "tcp" -> add("TCP")
             "udp" -> add("UDP")
-            "xhttp" -> {
-                add("XHTTP")
-                add("JSON")
-            }
-            "httpupgrade" -> {
-                add("HTTPUPGRADE")
-                add("JSON")
-            }
+            "xhttp" -> add("XHTTP")
+            "httpupgrade" -> add("HTTPUPGRADE")
             null, "" -> Unit
             else -> add(network.uppercase())
         }
+        if (fields.containsKey("xhttp-opts")) add("XHTTP")
+        if (fields.containsKey("httpupgrade-opts")) add("HTTPUPGRADE")
         if (fields.containsKey("reality-opts") ||
             fields["reality"]?.equals("true", true) == true ||
             fields["client-fingerprint"] != null && fields["public-key"] != null
@@ -332,7 +328,7 @@ object ClashYaml {
             type == "hysteria" || type == "hysteria2" || type == "hy2" || type == "tuic"
         if (hasTls && "REALITY" !in tags) add("TLS")
         fields["flow"]?.takeIf { it.contains("vision", ignoreCase = true) }?.let { add("VISION") }
-        if (fields["packet-encoding"] != null ||
+        val needsJson = fields["packet-encoding"] != null ||
             fields["xmux"] != null ||
             network == "xhttp" ||
             network == "httpupgrade" ||
@@ -340,23 +336,34 @@ object ClashYaml {
             fields.containsKey("httpupgrade-opts") ||
             fields["obfs"]?.contains("salamander", ignoreCase = true) == true ||
             fields.containsKey("brutal-opts") ||
-            ((type == "hysteria2" || type == "hy2") &&
+            type == "hysteria2" || type == "hy2" ||
+            ((type == "hysteria") &&
                 (fields.containsKey("quic") || fields["ports"] != null ||
                     fields["port-hopping"] != null || fields["hop-interval"] != null ||
                     fields["up"] != null || fields["down"] != null))
-        ) {
-            add("JSON")
-        }
-        // Hysteria2 is always TLS+QUIC; ensure both chips show even on minimal YAML.
+        if (needsJson) add("JSON")
+        // Hysteria2 is always TLS+QUIC.
         if (type == "hysteria2" || type == "hy2") {
             add("TLS")
             add("JSON")
         }
-        if (network == "xhttp" || fields.containsKey("xhttp-opts")) {
-            add("XHTTP")
-            add("JSON")
-        }
-        return tags
+        return orderProtocolTags(tags)
+    }
+
+    /** Protocol → transport → security → extras (XHTTP before TLS/JSON). */
+    private fun orderProtocolTags(tags: List<String>): List<String> {
+        val rank = mapOf(
+            "VLESS" to 10, "VMESS" to 11, "TROJAN" to 12, "SS" to 13, "SHADOWSOCKS" to 13,
+            "HYSTERIA2" to 14, "HY2" to 14, "HYSTERIA" to 15, "TUIC" to 16,
+            "WIREGUARD" to 17, "ANYTLS" to 18,
+            "GRPC" to 30, "WS" to 31, "XHTTP" to 32, "HTTPUPGRADE" to 33,
+            "H2" to 34, "HTTP" to 35, "TCP" to 36, "UDP" to 37,
+            "REALITY" to 50, "TLS" to 51, "VISION" to 52,
+            "JSON" to 90,
+        )
+        return tags.distinct().sortedWith(
+            compareBy<String> { rank[it] ?: 80 }.thenBy { it }
+        )
     }
 
     private data class ProxyGroup(val name: String, val members: List<String>)

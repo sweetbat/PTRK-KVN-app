@@ -123,9 +123,16 @@ internal actual suspend fun downloadSubscriptionBodyDirect(
             }
         }
 
-        // Prefer app identity so Remnawave HWID slots show PTRK-KVN-app, not ClashMeta.
-        // Format is forced with flag=meta / flag=clash query params.
-        val agents = listOf(appAgent)
+        // Remnawave: PTRK-KVN-app UA → base64 URI dump; ClashMeta/mihomo → Clash YAML.
+        // Keep x-device-model=PTRK-KVN-app for HWID labeling; fall back UA for YAML body.
+        val yamlAgents = listOf(
+            appAgent,
+            "ClashMeta/1.19.0",
+            "clash.meta/v1.19.0",
+            "mihomo/1.19.0",
+            "clash-verge",
+            "Clash",
+        )
         val joiner = if ('?' in url) "&" else "?"
         val urls = listOf(
             "$url${joiner}flag=meta",
@@ -133,22 +140,26 @@ internal actual suspend fun downloadSubscriptionBodyDirect(
             url,
         ).distinct()
 
-        for (candidate in urls) {
-            for (agent in agents) {
-                val downloaded = runCatching { fetch(candidate, agent, includeHwid = true) }.getOrNull()
-                if (downloaded != null && usable(downloaded.content)) return@withContext downloaded
-            }
-        }
-        if (!hwid.isNullOrBlank()) {
+        fun firstUsable(includeHwid: Boolean): DirectSubscriptionDownload? {
             for (candidate in urls) {
-                val downloaded = runCatching {
-                    fetch(candidate, appAgent, includeHwid = false)
-                }.getOrNull()
-                if (downloaded != null && usable(downloaded.content)) return@withContext downloaded
+                for (agent in yamlAgents) {
+                    val downloaded = runCatching {
+                        fetch(candidate, agent, includeHwid = includeHwid)
+                    }.getOrNull()
+                    if (downloaded != null && usable(downloaded.content)) return downloaded
+                }
             }
+            return null
         }
 
-        fetch(urls.first(), appAgent, includeHwid = !hwid.isNullOrBlank())
+        firstUsable(includeHwid = true)?.let { return@withContext it }
+        if (!hwid.isNullOrBlank()) {
+            firstUsable(includeHwid = false)?.let { return@withContext it }
+        }
+
+        // Last resort: return whatever we got (caller will show a clear error).
+        fetch(urls.first(), "ClashMeta/1.19.0", includeHwid = !hwid.isNullOrBlank())
+            ?: fetch(urls.first(), appAgent, includeHwid = !hwid.isNullOrBlank())
             ?: error("Subscription server returned an empty response")
     } finally {
         client.dispatcher.executorService.shutdown()
