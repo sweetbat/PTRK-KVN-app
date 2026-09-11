@@ -56,42 +56,42 @@ object MihomoEngine {
     )
 
     /**
-     * Always via selected node. hev mapdns returns 100.64/10 fake IPs; without this
-     * rule GEOIP,private→DIRECT blackholes them (that is why mapdns was disabled).
-     * Sniffer then restores the domain and the node dials real AAAA for ntc.party etc.
+     * Legacy mapdns range (if hev mapdns ever re-enabled). Prefer DOMAIN rules;
+     * GEOIP,private would otherwise DIRECT 100.64/10.
      */
     private val MAPDNS_VIA_NODE_RULES = listOf(
         "IP-CIDR,100.64.0.0/10,GLOBAL,no-resolve",
         "IP-CIDR,100.64.0.0/10,PROXY,no-resolve",
     )
 
+    /** ntc.party is AAAA-only publicly; same box serves HTTP on box.ntc.party IPv4. */
     private const val NTC_PARTY_IPV4 = "130.255.77.28"
     private const val NTC_PARTY_IPV6 = "2a02:e00:ffec:4b8::1"
 
-    /** Belt-and-suspenders for ntc.party (AAAA-only) in any routing mode. */
+    /** Always via selected node — any routing mode. */
     private fun ntcPartyRules(): List<String> = listOf(
         "DOMAIN,ntc.party,GLOBAL",
         "DOMAIN-SUFFIX,ntc.party,GLOBAL",
         "DOMAIN-KEYWORD,ntc.party,GLOBAL",
+        "IP-CIDR,$NTC_PARTY_IPV4/32,GLOBAL,no-resolve",
         "IP-CIDR6,$NTC_PARTY_IPV6/128,GLOBAL,no-resolve",
         "IP-CIDR6,2a02:e00:ffec:4b8::/64,GLOBAL,no-resolve",
-        "IP-CIDR,$NTC_PARTY_IPV4/32,GLOBAL,no-resolve",
         "DOMAIN,ntc.party,PROXY",
         "DOMAIN-SUFFIX,ntc.party,PROXY",
-        "IP-CIDR6,$NTC_PARTY_IPV6/128,PROXY,no-resolve",
         "IP-CIDR,$NTC_PARTY_IPV4/32,PROXY,no-resolve",
+        "IP-CIDR6,$NTC_PARTY_IPV6/128,PROXY,no-resolve",
     )
 
     /**
-     * Public DNS is AAAA-only. Pin hosts to that AAAA (not box IPv4): IPv4 hosts
-     * broke VLESS/gRPC; no hosts + ipv6:false left resolve empty after mapdns.
-     * hev mapdns still sends the domain over SOCKS; clash dials this AAAA via node.
+     * Proven path (1.0.36 Hy2): pin to same-box IPv4. AAAA hosts failed (exit nodes
+     * often have no IPv6). Public DNS has no A for ntc.party — sniffer restores SNI
+     * then hosts supplies 130.255.77.28 for dial.
      */
     private fun ntcPartyHosts(): JSONObject =
         JSONObject()
-            .put("ntc.party", NTC_PARTY_IPV6)
-            .put("www.ntc.party", NTC_PARTY_IPV6)
-            .put("box.ntc.party", NTC_PARTY_IPV6)
+            .put("ntc.party", NTC_PARTY_IPV4)
+            .put("www.ntc.party", NTC_PARTY_IPV4)
+            .put("box.ntc.party", NTC_PARTY_IPV4)
 
     private fun forceRules(): List<String> =
         MAPDNS_VIA_NODE_RULES + FORCE_VIA_GLOBAL_RULES + ntcPartyRules()
@@ -136,8 +136,8 @@ object MihomoEngine {
         val proxyForLog = selectedProxyName
             ?: selectedMap["GLOBAL"]
             ?: selectedMap["PROXY"]
-        // mapdns→domain SOCKS; hosts→AAAA dial via node (works Hy2 + VLESS + olcRTC).
-        Log.i(TAG, "setupProfile proxy=$proxyForLog mapdns→GLOBAL ntc=hosts-AAAA=$NTC_PARTY_IPV6")
+        // mapdns gives apps a fake A; SOCKS gets the domain; hosts dials IPv4 via node.
+        Log.i(TAG, "setupProfile proxy=$proxyForLog mapdns+hosts=$NTC_PARTY_IPV4")
         val configPath = runtimeConfigWithForcedProxyDomains(yamlPath)
         // RKN TSPU hijacks UDP DNS to 8.8.8.8 / 1.1.1.1. Use carrier + Yandex,
         // and DoH over HTTPS (TCP) so nameserver lookups are not intercepted.
@@ -151,7 +151,8 @@ object MihomoEngine {
         }
         val overrides = JSONObject()
             .put("mode", mode)
-            .put("ipv6", true)
+            // Dial hosts IPv4 only — exit nodes often lack IPv6 egress.
+            .put("ipv6", false)
             .put("unified-delay", true)
             .put("tcp-concurrent", true)
             .put("hosts", ntcPartyHosts())
@@ -223,10 +224,11 @@ object MihomoEngine {
                 "dns",
                 JSONObject()
                     .put("enable", true)
-                    .put("ipv6", true)
+                    .put("ipv6", false)
                     .put("use-hosts", true)
                     .put("use-system-hosts", false)
-                    // redir-host: hev mapdns supplies fake IPs; sniffer restores domains.
+                    // Real IPs (no Clash fake-ip). System DNS = Yandex; sniffer+hosts
+                    // rewrite ntc.party / AAAA connections to IPv4 dial via node.
                     .put("enhanced-mode", "redir-host")
                     .put("listen", "0.0.0.0:1053")
                     .put("nameserver", nameServersJson)
@@ -262,31 +264,34 @@ object MihomoEngine {
         if (!src.isFile) return yamlPath
         val dest = File(src.parentFile, "${src.nameWithoutExtension}.runtime.yaml")
         var body = src.readText()
-        // Pin ntc → public AAAA (not box IPv4). Strip stale IPv4/fake-ip pins first.
-        body = body
-            .replace(Regex("""(?m)^\s*ntc\.party:\s*.*\r?\n"""), "")
-            .replace(Regex("""(?m)^\s*www\.ntc\.party:\s*.*\r?\n"""), "")
-            .replace(Regex("""(?m)^\s*box\.ntc\.party:\s*.*\r?\n"""), "")
-        if (Regex("""(?m)^hosts\s*:""").containsMatchIn(body)) {
-            body = body.replaceFirst(
-                Regex("""(?m)^hosts\s*:\s*\r?\n"""),
-                "hosts:\n  ntc.party: $NTC_PARTY_IPV6\n  www.ntc.party: $NTC_PARTY_IPV6\n  box.ntc.party: $NTC_PARTY_IPV6\n",
-            )
-        } else {
-            body = body.trimEnd() + """
+        // Ensure hosts map ntc.party → same-box IPv4 (public DNS is AAAA-only).
+        if (!Regex("""(?m)^\s*ntc\.party\s*:""").containsMatchIn(body)) {
+            if (Regex("""(?m)^hosts\s*:""").containsMatchIn(body)) {
+                body = body.replaceFirst(
+                    Regex("""(?m)^hosts\s*:\s*\r?\n"""),
+                    "hosts:\n  ntc.party: $NTC_PARTY_IPV4\n  www.ntc.party: $NTC_PARTY_IPV4\n  box.ntc.party: $NTC_PARTY_IPV4\n",
+                )
+            } else {
+                body = body.trimEnd() + """
 
 hosts:
-  ntc.party: $NTC_PARTY_IPV6
-  www.ntc.party: $NTC_PARTY_IPV6
-  box.ntc.party: $NTC_PARTY_IPV6
+  ntc.party: $NTC_PARTY_IPV4
+  www.ntc.party: $NTC_PARTY_IPV4
+  box.ntc.party: $NTC_PARTY_IPV4
 """
+            }
+        } else {
+            body = body
+                .replace(Regex("""(?m)^(\s*)ntc\.party:\s*.*$"""), "$1ntc.party: $NTC_PARTY_IPV4")
+                .replace(Regex("""(?m)^(\s*)www\.ntc\.party:\s*.*$"""), "$1www.ntc.party: $NTC_PARTY_IPV4")
+                .replace(Regex("""(?m)^(\s*)box\.ntc\.party:\s*.*$"""), "$1box.ntc.party: $NTC_PARTY_IPV4")
         }
         if (Regex("""(?m)^ipv6\s*:""").containsMatchIn(body)) {
-            body = body.replace(Regex("""(?m)^ipv6\s*:\s*\S+"""), "ipv6: true")
+            body = body.replace(Regex("""(?m)^ipv6\s*:\s*\S+"""), "ipv6: false")
         } else {
-            body = "ipv6: true\n$body"
+            body = "ipv6: false\n$body"
         }
-        body = body.replace(Regex("""(?m)^(\s+)ipv6\s*:\s*false\s*$"""), "$1ipv6: true")
+        body = body.replace(Regex("""(?m)^(\s+)ipv6\s*:\s*true\s*$"""), "$1ipv6: false")
         val insert = forceRules().joinToString("\n") { "  - $it" } + "\n"
         val match = RULES_SECTION.find(body)
         val patched = if (match != null) {
@@ -296,7 +301,7 @@ hosts:
             body.trimEnd() + "\n\nrules:\n" + insert
         }
         dest.writeText(patched)
-        Log.i(TAG, "Force-proxy domains via GLOBAL prepended -> ${dest.name} mapdns+hosts-AAAA")
+        Log.i(TAG, "Force-proxy domains via GLOBAL prepended -> ${dest.name} ntc=GLOBAL+$NTC_PARTY_IPV4")
         return dest.absolutePath
     }
 
