@@ -34,12 +34,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import org.olcbox.app.data.model.SubscriptionMetadata
 import org.olcbox.app.data.model.parseTrafficQuota
 import org.olcbox.app.ui.features.locations.LocationItem
 import org.olcbox.app.ui.features.locations.PingsState
 import org.olcbox.app.ui.features.locations.components.LocationRow
 import org.olcbox.app.ui.features.locations.components.RefreshButton
 import org.olcbox.app.ui.components.TrafficQuotaIndicator
+import androidx.compose.ui.platform.UriHandler
 
 @Composable
 fun LocationSelectorScreen(
@@ -73,7 +75,17 @@ fun LocationSelectorScreen(
 
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             subscriptionGroups.forEach { group ->
-                val subscription = group.firstOrNull()?.metadata?.subscription
+                val subscription = group
+                    .mapNotNull { it.metadata?.subscription }
+                    .firstOrNull {
+                        !it.announce.isNullOrBlank() ||
+                            !it.used.isNullOrBlank() ||
+                            !it.supportUrl.isNullOrBlank() ||
+                            !it.webPageUrl.isNullOrBlank() ||
+                            !it.description.isNullOrBlank() ||
+                            !it.name.isNullOrBlank()
+                    }
+                    ?: group.firstOrNull()?.metadata?.subscription
                 val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
@@ -85,7 +97,7 @@ fun LocationSelectorScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -128,140 +140,10 @@ fun LocationSelectorScreen(
                             }
                         }
 
-                        val announce = subscription?.displayAnnounce()
-                            ?: subscription?.displayDescription()
-                        if (!announce.isNullOrBlank()) {
-                            Surface(
-                                modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(12.dp),
-                                color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.55f),
-                                border = BorderStroke(
-                                    1.dp,
-                                    MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
-                                ),
-                            ) {
-                                Text(
-                                    text = announce,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 4,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-                                )
-                            }
-                        }
-
-                        fun usableExpire(value: String?): String? {
-                            val v = value?.trim()?.takeIf { it.isNotBlank() } ?: return null
-                            if (v.equals("regular", true) || v.equals("bypass", true)) return null
-                            return v.takeIf {
-                                it == "\u221e" || it == "∞" || it.contains('.') ||
-                                    it.contains('-') || it.any { ch -> ch.isDigit() }
-                            }
-                        }
-                        val expire = usableExpire(subscription?.description)
-                            ?: usableExpire(subscription?.comment)
-                        if (!expire.isNullOrBlank()) {
-                            Surface(
-                                modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(12.dp),
-                                color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.55f),
-                                border = BorderStroke(
-                                    1.dp,
-                                    MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
-                                ),
-                            ) {
-                                Text(
-                                    text = "${org.olcbox.app.i18n.S.subscriptionExpires}: $expire",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-                                )
-                            }
-                        }
-
-                        val trafficQuota = parseTrafficQuota(subscription?.used, subscription?.available)
-                        val unlimitedTraffic = when {
-                            trafficQuota != null -> null
-                            !subscription?.used.isNullOrBlank() && !subscription?.available.isNullOrBlank() ->
-                                org.olcbox.app.i18n.S.trafficSummary(subscription.used!!, subscription.available!!)
-                            !subscription?.used.isNullOrBlank() ->
-                                org.olcbox.app.i18n.S.localizeDataUnit(subscription.used!!)
-                            else -> null
-                        }
-                        if (trafficQuota != null || !unlimitedTraffic.isNullOrBlank()) {
-                            Surface(
-                                modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(12.dp),
-                                color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.55f),
-                                border = BorderStroke(
-                                    1.dp,
-                                    MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
-                                ),
-                            ) {
-                                Column(
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-                                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                                ) {
-                                    Text(
-                                        text = org.olcbox.app.i18n.S.traffic,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                    if (trafficQuota != null) {
-                                        TrafficQuotaIndicator(
-                                            used = subscription?.used,
-                                            available = subscription?.available,
-                                            modifier = Modifier.fillMaxWidth(),
-                                        )
-                                    } else if (!unlimitedTraffic.isNullOrBlank()) {
-                                        Text(
-                                            text = unlimitedTraffic,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurface,
-                                        )
-                                    }
-                                }
-                            }
-                        }
-
-                        val supportUrl = subscription?.supportUrl
-                        val webPageUrl = subscription?.webPageUrl
-                        if (!supportUrl.isNullOrBlank() || !webPageUrl.isNullOrBlank()) {
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                modifier = Modifier.padding(horizontal = 4.dp),
-                            ) {
-                                if (!supportUrl.isNullOrBlank()) {
-                                    Surface(
-                                        shape = RoundedCornerShape(999.dp),
-                                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
-                                        onClick = { runCatching { uriHandler.openUri(supportUrl) } },
-                                    ) {
-                                        Text(
-                                            text = org.olcbox.app.i18n.S.support,
-                                            color = MaterialTheme.colorScheme.primary,
-                                            style = MaterialTheme.typography.labelLarge,
-                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                                        )
-                                    }
-                                }
-                                if (!webPageUrl.isNullOrBlank()) {
-                                    Surface(
-                                        shape = RoundedCornerShape(999.dp),
-                                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
-                                        onClick = { runCatching { uriHandler.openUri(webPageUrl) } },
-                                    ) {
-                                        Text(
-                                            text = org.olcbox.app.i18n.S.website,
-                                            color = MaterialTheme.colorScheme.primary,
-                                            style = MaterialTheme.typography.labelLarge,
-                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                                        )
-                                    }
-                                }
-                            }
-                        }
+                        SubscriptionInfoPanel(
+                            subscription = subscription,
+                            uriHandler = uriHandler,
+                        )
 
                         Column(
                             verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -474,6 +356,196 @@ private fun LocationGroupHeader(
         fontWeight = FontWeight.SemiBold,
         modifier = modifier.padding(top = 2.dp, start = 4.dp)
     )
+}
+
+@Composable
+private fun SubscriptionInfoPanel(
+    subscription: SubscriptionMetadata?,
+    uriHandler: UriHandler,
+) {
+    if (subscription == null) return
+
+    fun usableExpire(value: String?): String? {
+        val v = value?.trim()?.takeIf { it.isNotBlank() } ?: return null
+        if (v.equals("regular", true) || v.equals("bypass", true)) return null
+        return v.takeIf {
+            it == "\u221e" || it == "∞" || it.contains('.') ||
+                it.contains('-') || it.any { ch -> ch.isDigit() }
+        }
+    }
+    val announce = subscription.displayAnnounce()
+        ?: subscription.displayDescription()?.takeUnless { usableExpire(it) != null }
+    val expire = usableExpire(subscription.description) ?: usableExpire(subscription.comment)
+    val trafficQuota = parseTrafficQuota(subscription.used, subscription.available)
+    val unlimitedTraffic = when {
+        trafficQuota != null -> null
+        !subscription.used.isNullOrBlank() && !subscription.available.isNullOrBlank() ->
+            org.olcbox.app.i18n.S.trafficSummary(subscription.used!!, subscription.available!!)
+        !subscription.used.isNullOrBlank() ->
+            org.olcbox.app.i18n.S.localizeDataUnit(subscription.used!!)
+        else -> null
+    }
+    val supportUrl = subscription.supportUrl
+    val webPageUrl = subscription.webPageUrl
+    val hasAnything = !announce.isNullOrBlank() ||
+        !expire.isNullOrBlank() ||
+        trafficQuota != null ||
+        !unlimitedTraffic.isNullOrBlank() ||
+        !supportUrl.isNullOrBlank() ||
+        !webPageUrl.isNullOrBlank()
+    if (!hasAnything) return
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (!announce.isNullOrBlank()) {
+            SubscriptionInfoFrame(label = org.olcbox.app.i18n.S.description) {
+                Text(
+                    text = announce,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 4,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+
+        if (!expire.isNullOrBlank() || trafficQuota != null || !unlimitedTraffic.isNullOrBlank()) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                if (!expire.isNullOrBlank()) {
+                    SubscriptionInfoFrame(
+                        label = org.olcbox.app.i18n.S.subscriptionExpires,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text(
+                            text = expire,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                if (trafficQuota != null || !unlimitedTraffic.isNullOrBlank()) {
+                    SubscriptionInfoFrame(
+                        label = org.olcbox.app.i18n.S.traffic,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        if (trafficQuota != null) {
+                            TrafficQuotaIndicator(
+                                used = subscription.used,
+                                available = subscription.available,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        } else if (!unlimitedTraffic.isNullOrBlank()) {
+                            Text(
+                                text = unlimitedTraffic,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        if (!supportUrl.isNullOrBlank() || !webPageUrl.isNullOrBlank()) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                if (!supportUrl.isNullOrBlank()) {
+                    SubscriptionInfoFrame(
+                        label = org.olcbox.app.i18n.S.support,
+                        modifier = Modifier.weight(1f),
+                        onClick = { runCatching { uriHandler.openUri(supportUrl) } },
+                    ) {
+                        Text(
+                            text = prettyUrlLabel(supportUrl),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                if (!webPageUrl.isNullOrBlank()) {
+                    SubscriptionInfoFrame(
+                        label = org.olcbox.app.i18n.S.website,
+                        modifier = Modifier.weight(1f),
+                        onClick = { runCatching { uriHandler.openUri(webPageUrl) } },
+                    ) {
+                        Text(
+                            text = prettyUrlLabel(webPageUrl),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun prettyUrlLabel(url: String): String {
+    return url
+        .removePrefix("https://")
+        .removePrefix("http://")
+        .removePrefix("tg://")
+        .trimEnd('/')
+        .ifBlank { url }
+}
+
+@Composable
+private fun SubscriptionInfoFrame(
+    label: String,
+    modifier: Modifier = Modifier,
+    onClick: (() -> Unit)? = null,
+    content: @Composable () -> Unit,
+) {
+    val shape = RoundedCornerShape(14.dp)
+    val color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.72f)
+    val border = BorderStroke(
+        1.dp,
+        MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+    )
+    val body: @Composable () -> Unit = {
+        Column(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            content()
+        }
+    }
+    if (onClick != null) {
+        Surface(
+            modifier = modifier.fillMaxWidth(),
+            shape = shape,
+            color = color,
+            border = border,
+            onClick = onClick,
+            content = body,
+        )
+    } else {
+        Surface(
+            modifier = modifier.fillMaxWidth(),
+            shape = shape,
+            color = color,
+            border = border,
+            content = body,
+        )
+    }
 }
 
 @Composable

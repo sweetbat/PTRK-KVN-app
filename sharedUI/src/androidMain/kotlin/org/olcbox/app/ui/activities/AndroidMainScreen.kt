@@ -208,7 +208,7 @@ fun AndroidMainScreen(
                     }
                 },
                 onFailure = { error ->
-                    updateStatusText = error.message ?: "Update check failed"
+                    updateStatusText = error.message ?: S.updateCheckFailed
                 }
             )
         }
@@ -216,26 +216,28 @@ fun AndroidMainScreen(
 
     fun downloadUpdate(info: AppUpdateInfo) {
         if (updateDownloadProgress != null) return
+        // Show «Загрузка» + progress immediately on tap (before permission / network).
+        updateDownloadProgress = 0f
+        updateStatusText = S.downloadingAsset(info.asset.name)
         scope.launch {
             if (!updateInstaller.canRequestPackageInstalls()) {
+                updateDownloadProgress = null
                 updateInstaller.openUnknownSourcesSettings()
-                updateStatusText = "Allow PTRK-KVN to install updates, then tap Download again"
+                updateStatusText = S.allowUnknownSources
                 Toast.makeText(context, updateStatusText, Toast.LENGTH_LONG).show()
                 return@launch
             }
 
-            updateDownloadProgress = 0f
-            updateStatusText = "Downloading ${info.asset.name}..."
             val result = updateInstaller.download(info.asset) { progress ->
                 updateDownloadProgress = progress
             }
             val file = result.getOrElse { error ->
-                updateStatusText = "Download failed: ${error.message ?: "unknown error"}"
+                updateStatusText = S.downloadFailed(error.message ?: "unknown error")
                 updateDownloadProgress = null
                 Toast.makeText(context, updateStatusText, Toast.LENGTH_LONG).show()
                 return@launch
             }
-            updateStatusText = "Installing ${info.asset.name}"
+            updateStatusText = S.installingAsset(info.asset.name)
             saveUpdateSettings(
                 updateSettings.copy(
                     lastSeenUpdateVersion = info.identity(),
@@ -249,7 +251,7 @@ fun AndroidMainScreen(
                 .onFailure {
                     relaunchAfterInstall = false
                     updateOffer = info
-                    updateStatusText = "Could not open installer: ${it.message}"
+                    updateStatusText = S.installOpenFailed(it.message ?: "unknown error")
                 }
         }
     }
@@ -434,7 +436,12 @@ fun AndroidMainScreen(
             downloadProgress = updateDownloadProgress,
             onLater = { postponeUpdate(info) },
             onDownload = { downloadUpdate(info) },
-            downloadLabel = if (updateInstaller.downloadedFile(info.asset) != null) "Install" else "Download"
+            downloadLabel = when {
+                updateDownloadProgress != null -> S.downloadingUpdate
+                updateInstaller.downloadedFile(info.asset) != null -> S.installUpdate
+                else -> S.downloadUpdate
+            },
+            downloadEnabled = updateDownloadProgress == null,
         )
     }
 

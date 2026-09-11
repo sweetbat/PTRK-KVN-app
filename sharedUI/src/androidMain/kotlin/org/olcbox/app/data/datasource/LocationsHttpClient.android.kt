@@ -227,12 +227,39 @@ private fun Response.subscriptionAnnounce(): String? {
 }
 
 private fun Response.subscriptionSupportUrl(): String? {
-    return header("support-url")?.trim()?.takeIf { it.startsWith("http", ignoreCase = true) }
+    val raw = header("support-url")?.trim()?.ifBlank { null }
+        ?: header("profile-support-url")?.trim()?.ifBlank { null }
+        ?: return null
+    return decodePossiblyBase64Header(raw)?.takeIf { isOpenableUrl(it) }
 }
 
 private fun Response.subscriptionWebPageUrl(): String? {
-    return header("profile-web-page-url")?.trim()?.takeIf { it.startsWith("http", ignoreCase = true) }
-        ?: header("website")?.trim()?.takeIf { it.startsWith("http", ignoreCase = true) }
+    val raw = header("profile-web-page-url")?.trim()?.ifBlank { null }
+        ?: header("website")?.trim()?.ifBlank { null }
+        ?: header("web-page-url")?.trim()?.ifBlank { null }
+        ?: return null
+    return decodePossiblyBase64Header(raw)?.takeIf { isOpenableUrl(it) }
+}
+
+private fun decodePossiblyBase64Header(raw: String): String? {
+    if (raw.startsWith("base64:", ignoreCase = true)) {
+        val encoded = raw.substringAfter(':').filterNot { it.isWhitespace() }
+        return runCatching {
+            android.util.Base64.decode(encoded, android.util.Base64.DEFAULT)
+                .toString(Charsets.UTF_8)
+                .trim()
+                .ifBlank { null }
+        }.getOrNull() ?: raw.removePrefix("base64:").trim()
+    }
+    return raw
+}
+
+private fun isOpenableUrl(value: String): Boolean {
+    val v = value.trim()
+    return v.startsWith("http://", ignoreCase = true) ||
+        v.startsWith("https://", ignoreCase = true) ||
+        v.startsWith("tg://", ignoreCase = true) ||
+        v.startsWith("ton://", ignoreCase = true)
 }
 
 private fun formatSubscriptionBytes(bytes: Long): String {

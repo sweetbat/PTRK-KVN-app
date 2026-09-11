@@ -71,16 +71,37 @@ object S {
         if (ru) "\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u043e \u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u0435" else "Update available"
     val downloadUpdate get() =
         if (ru) "\u0421\u043a\u0430\u0447\u0430\u0442\u044c" else "Download"
+    val downloadingUpdate get() =
+        if (ru) "\u0417\u0430\u0433\u0440\u0443\u0437\u043a\u0430" else "Downloading"
+    val installUpdate get() =
+        if (ru) "\u0423\u0441\u0442\u0430\u043d\u043e\u0432\u0438\u0442\u044c" else "Install"
     val later get() =
         if (ru) "\u041f\u043e\u0437\u0436\u0435" else "Later"
+    fun downloadingAsset(name: String): String =
+        if (ru) "\u0417\u0430\u0433\u0440\u0443\u0437\u043a\u0430 $name..." else "Downloading $name..."
+    fun installingAsset(name: String): String =
+        if (ru) "\u0423\u0441\u0442\u0430\u043d\u043e\u0432\u043a\u0430 $name" else "Installing $name"
+    fun downloadFailed(message: String): String =
+        if (ru) "\u041e\u0448\u0438\u0431\u043a\u0430 \u0437\u0430\u0433\u0440\u0443\u0437\u043a\u0438: $message"
+        else "Download failed: $message"
+    fun installOpenFailed(message: String): String =
+        if (ru) "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u0442\u043a\u0440\u044b\u0442\u044c \u0443\u0441\u0442\u0430\u043d\u043e\u0432\u0449\u0438\u043a: $message"
+        else "Could not open installer: $message"
+    val allowUnknownSources get() =
+        if (ru) "\u0420\u0430\u0437\u0440\u0435\u0448\u0438\u0442\u0435 PTRK-KVN \u0443\u0441\u0442\u0430\u043d\u0430\u0432\u043b\u0438\u0432\u0430\u0442\u044c \u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u044f, \u0437\u0430\u0442\u0435\u043c \u0441\u043d\u043e\u0432\u0430 \u043d\u0430\u0436\u043c\u0438\u0442\u0435 \u00ab\u0421\u043a\u0430\u0447\u0430\u0442\u044c\u00bb"
+        else "Allow PTRK-KVN to install updates, then tap Download again"
+    val updateCheckFailed get() =
+        if (ru) "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043f\u0440\u043e\u0432\u0435\u0440\u0438\u0442\u044c \u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u044f" else "Update check failed"
     val updateSubscription get() =
         if (ru) "\u041e\u0431\u043d\u043e\u0432\u0438\u0442\u044c \u043f\u043e\u0434\u043f\u0438\u0441\u043a\u0438" else "Update subscriptions"
     val subscriptionUpdated get() =
         if (ru) "\u041f\u043e\u0434\u043f\u0438\u0441\u043a\u0430 \u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0430" else "Subscription updated"
     val traffic get() = if (ru) "\u0422\u0440\u0430\u0444\u0438\u043a" else "Traffic"
     val status get() = if (ru) "\u0421\u0442\u0430\u0442\u0443\u0441" else "Status"
+    val description get() =
+        if (ru) "\u041e\u043f\u0438\u0441\u0430\u043d\u0438\u0435" else "Description"
     val subscriptionExpires get() =
-        if (ru) "\u0414\u0435\u0439\u0441\u0442\u0432\u0443\u0435\u0442 \u0434\u043e" else "Expires"
+        if (ru) "\u0421\u0440\u043e\u043a" else "Expires"
 
     val language get() = if (ru) "\u042f\u0437\u044b\u043a" else "Language"
     val chooseLanguageTitle get() = if (ru) "\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u044f\u0437\u044b\u043a" else "Choose language"

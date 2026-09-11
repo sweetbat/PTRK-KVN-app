@@ -404,6 +404,7 @@ private fun AppSettingsHubContent(
 ) {
     val language by AppLocale.language.collectAsState()
     var showBetaDialog by remember { mutableStateOf(false) }
+    var versionTapCount by remember { mutableStateOf(0) }
     val routingOn = mihomoMode.lowercase() != "global" && mihomoMode.lowercase() != "direct"
     Column(
         modifier = Modifier
@@ -489,7 +490,13 @@ private fun AppSettingsHubContent(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(top = 4.dp)
-                .clickable { showBetaDialog = true },
+                .clickable {
+                    versionTapCount += 1
+                    if (versionTapCount >= 7) {
+                        versionTapCount = 0
+                        showBetaDialog = true
+                    }
+                },
             contentAlignment = Alignment.Center
         ) {
             Text(
@@ -1226,6 +1233,7 @@ private fun UpdatesSettingsContent(
     onBack: () -> Unit,
     onIntervalSelected: (Int) -> Unit,
     onCheckUpdatesClick: () -> Unit,
+    @Suppress("UNUSED_PARAMETER")
     onBetaChannelChanged: (Boolean) -> Unit,
 ) {
     Column(
@@ -1243,7 +1251,6 @@ private fun UpdatesSettingsContent(
         )
 
         Spacer(Modifier.height(18.dp))
-        Spacer(Modifier.height(18.dp))
 
         SettingsSectionLabel(S.checkInterval)
         Spacer(Modifier.height(8.dp))
@@ -1256,17 +1263,6 @@ private fun UpdatesSettingsContent(
                 )
             }
         }
-
-        Spacer(Modifier.height(18.dp))
-
-        SettingsSwitchRow(
-            title = S.seekBeta,
-            value = if (settings.seeksBeta) S.betaEnabled else S.betaDisabled,
-            icon = Icons.Outlined.Refresh,
-            checked = settings.seeksBeta,
-            enabled = true,
-            onCheckedChange = onBetaChannelChanged,
-        )
 
         Spacer(Modifier.height(18.dp))
 

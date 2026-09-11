@@ -565,11 +565,45 @@ data class LocationMetadata(
     }
 
     fun protocolTags(): List<String> {
-        return protocol
+        val raw = protocol
             ?.split('|', ',', '·', '•')
             ?.map { it.trim() }
             ?.filter { it.isNotBlank() }
             .orEmpty()
+        return enrichProtocolTags(raw, name)
+    }
+
+    companion object {
+        /** Fill TLS/JSON for Hysteria2 and XHTTP even when tags were stored before those chips existed. */
+        fun enrichProtocolTags(tags: List<String>, displayName: String? = null): List<String> {
+            val out = mutableListOf<String>()
+            fun add(tag: String) {
+                val t = tag.trim().uppercase()
+                if (t.isNotBlank() && t !in out) out += t
+            }
+            tags.forEach(::add)
+            val nameLower = displayName.orEmpty().lowercase()
+            val hasHy2 = out.any { it == "HYSTERIA2" || it == "HY2" || it == "HYSTERIA" }
+            if (hasHy2) {
+                add("TLS")
+                add("JSON")
+            }
+            val looksBypassXhttp =
+                (nameLower.contains("\u043e\u0431\u0445\u043e\u0434") ||
+                    nameLower.contains("bypass") ||
+                    nameLower.contains("[json]")) &&
+                    out.any { it == "JSON" } &&
+                    out.none { it in setOf("GRPC", "WS", "H2", "TCP") }
+            val looksXhttp = out.any { it == "XHTTP" || it == "HTTPUPGRADE" } ||
+                nameLower.contains("xhttp") ||
+                nameLower.contains("httpupgrade") ||
+                looksBypassXhttp
+            if (looksXhttp) {
+                add("XHTTP")
+                add("JSON")
+            }
+            return out
+        }
     }
 
     fun isEmpty(): Boolean {

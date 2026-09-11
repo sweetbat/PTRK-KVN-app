@@ -39,6 +39,7 @@ fun ApplicationUpdateOfferSheet(
     onLater: () -> Unit,
     onDownload: () -> Unit,
     downloadLabel: String? = null,
+    downloadEnabled: Boolean = true,
 ) {
     val language by AppLocale.language.collectAsState()
     @Suppress("UNUSED_EXPRESSION")
@@ -103,15 +104,22 @@ fun ApplicationUpdateOfferSheet(
             ) {
                 OutlinedButton(
                     onClick = onLater,
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.weight(1f),
+                    enabled = downloadProgress == null,
                 ) {
                     Text(S.later)
                 }
                 Button(
                     onClick = onDownload,
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.weight(1f),
+                    enabled = downloadEnabled,
                 ) {
-                    Text(downloadLabel ?: S.downloadUpdate)
+                    Text(
+                        when {
+                            downloadProgress != null -> S.downloadingUpdate
+                            else -> downloadLabel ?: S.downloadUpdate
+                        }
+                    )
                 }
             }
         }

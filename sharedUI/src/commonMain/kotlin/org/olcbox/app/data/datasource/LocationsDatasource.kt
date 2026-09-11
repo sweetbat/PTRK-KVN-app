@@ -1201,7 +1201,10 @@ class LocationsRepositoryImpl(
                 dnsServer = entry.location.dnsServer
                     .ifBlank { previousEntry?.location?.dnsServer.orEmpty() }
                     .takeIf { it.isNotBlank() },
-                metadata = entry.metadata.withManualSubscriptionInterval(manualInterval)
+                metadata = mergeSubscriptionMetadataOnRefresh(
+                    previous = previousEntry?.metadata,
+                    incoming = entry.metadata,
+                ).withManualSubscriptionInterval(manualInterval)
             ).normalized()
         }
 
@@ -1748,6 +1751,65 @@ class LocationsRepositoryImpl(
             subscription = subscription.copy(updateIntervalMs = intervalMs)
         ).normalized()
     }
+
+    /**
+     * Refresh replaces leaf nodes from YAML but must keep Remnawave panel fields
+     * (announce / traffic / support / site / expire / title) when the new download
+     * omits those headers — otherwise the subscription card goes empty.
+     */
+    private fun mergeSubscriptionMetadataOnRefresh(
+        previous: LocationMetadata?,
+        incoming: LocationMetadata?,
+    ): LocationMetadata {
+        val prevSub = previous?.subscription
+        val nextSub = incoming?.subscription
+        val mergedSub = SubscriptionMetadata(
+            name = firstNonBlankOrNull(nextSub?.name, prevSub?.name),
+            description = firstNonBlankOrNull(nextSub?.description, prevSub?.description),
+            comment = firstNonBlankOrNull(nextSub?.comment, prevSub?.comment),
+            update = firstNonBlankOrNull(nextSub?.update, prevSub?.update),
+            refresh = firstNonBlankOrNull(nextSub?.refresh, prevSub?.refresh),
+            color = firstNonBlankOrNull(nextSub?.color, prevSub?.color),
+            icon = firstNonBlankOrNull(nextSub?.icon, prevSub?.icon),
+            used = firstNonBlankOrNull(nextSub?.used, prevSub?.used),
+            available = firstNonBlankOrNull(nextSub?.available, prevSub?.available),
+            announce = firstNonBlankOrNull(nextSub?.announce, prevSub?.announce),
+            supportUrl = firstNonBlankOrNull(nextSub?.supportUrl, prevSub?.supportUrl),
+            webPageUrl = firstNonBlankOrNull(nextSub?.webPageUrl, prevSub?.webPageUrl),
+            updateIntervalMs = nextSub?.updateIntervalMs ?: prevSub?.updateIntervalMs,
+            manualUpdateIntervalMs = nextSub?.manualUpdateIntervalMs
+                ?: prevSub?.manualUpdateIntervalMs,
+            allowInsecureRequests = nextSub?.allowInsecureRequests
+                ?: prevSub?.allowInsecureRequests
+                ?: false,
+            updateIntervalHours = nextSub?.updateIntervalHours ?: prevSub?.updateIntervalHours,
+            lastRefreshAttemptAtEpochMs = nextSub?.lastRefreshAttemptAtEpochMs
+                ?: prevSub?.lastRefreshAttemptAtEpochMs,
+            lastRefreshAtEpochMs = nextSub?.lastRefreshAtEpochMs
+                ?: prevSub?.lastRefreshAtEpochMs,
+            consecutiveRefreshFailures = nextSub?.consecutiveRefreshFailures
+                ?: prevSub?.consecutiveRefreshFailures
+                ?: 0,
+        ).normalized().takeUnless { it.isEmpty() }
+        return (incoming ?: previous ?: LocationMetadata()).copy(
+            name = firstNonBlankOrNull(incoming?.name, previous?.name),
+            description = firstNonBlankOrNull(incoming?.description, previous?.description),
+            color = firstNonBlankOrNull(incoming?.color, previous?.color),
+            icon = firstNonBlankOrNull(incoming?.icon, previous?.icon),
+            used = firstNonBlankOrNull(incoming?.used, previous?.used),
+            available = firstNonBlankOrNull(incoming?.available, previous?.available),
+            ip = firstNonBlankOrNull(incoming?.ip, previous?.ip),
+            comment = firstNonBlankOrNull(incoming?.comment, previous?.comment),
+            mimo = firstNonBlankOrNull(incoming?.mimo, previous?.mimo),
+            exit = firstNonBlankOrNull(incoming?.exit, previous?.exit),
+            // Prefer freshly extracted protocol tags from YAML.
+            protocol = firstNonBlankOrNull(incoming?.protocol, previous?.protocol),
+            subscription = mergedSub,
+        ).normalized()
+    }
+
+    private fun firstNonBlankOrNull(vararg values: String?): String? =
+        values.firstOrNull { !it.isNullOrBlank() }
 
     private fun LocationMetadata?.withManualSubscriptionInterval(intervalMs: Long?): LocationMetadata {
         val subscription = this?.subscription ?: SubscriptionMetadata()

@@ -25,9 +25,11 @@ object OlcRtcRoutingConfig {
         "DOMAIN-SUFFIX,speedtest.net,PROXY",
         "DOMAIN-SUFFIX,ookla.com,PROXY",
         "DOMAIN-SUFFIX,speedtestcustom.com,PROXY",
-        // AAAA-only public DNS — IPv4 hosts injected below; always via tunnel.
+        // IPv6-only forum: always via tunnel; hosts map AAAA → same-box IPv4.
+        "DOMAIN,ntc.party,PROXY",
         "DOMAIN-SUFFIX,ntc.party,PROXY",
         "DOMAIN-KEYWORD,ntc.party,PROXY",
+        "IP-CIDR,130.255.77.28/32,PROXY,no-resolve",
     )
 
     fun outputFile(context: Context): File =
@@ -73,6 +75,13 @@ object OlcRtcRoutingConfig {
             appendLine("  ntc.party: 130.255.77.28")
             appendLine("  www.ntc.party: 130.255.77.28")
             appendLine("  box.ntc.party: 130.255.77.28")
+            appendLine()
+            appendLine("dns:")
+            appendLine("  enable: true")
+            appendLine("  ipv6: false")
+            appendLine("  use-hosts: true")
+            appendLine("  use-system-hosts: false")
+            appendLine("  enhanced-mode: redir-host")
             appendLine()
             appendLine("proxies:")
             appendLine("  - name: $PROXY_NAME")

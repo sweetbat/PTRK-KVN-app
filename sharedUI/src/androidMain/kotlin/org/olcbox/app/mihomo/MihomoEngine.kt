@@ -60,8 +60,15 @@ object MihomoEngine {
 
     /** ntc.party must always exit via the selected node (GLOBAL), never DIRECT. */
     private fun ntcPartyRules(): List<String> = listOf(
+        "DOMAIN,ntc.party,GLOBAL",
         "DOMAIN-SUFFIX,ntc.party,GLOBAL",
         "DOMAIN-KEYWORD,ntc.party,GLOBAL",
+        // Same-box IPv4 used by hosts map (AAAA-only public DNS).
+        "IP-CIDR,130.255.77.28/32,GLOBAL,no-resolve",
+        // Some Remnawave profiles only expose PROXY, not GLOBAL, in rule mode.
+        "DOMAIN,ntc.party,PROXY",
+        "DOMAIN-SUFFIX,ntc.party,PROXY",
+        "IP-CIDR,130.255.77.28/32,PROXY,no-resolve",
     )
 
     private fun forceRules(): List<String> =
@@ -200,6 +207,9 @@ object MihomoEngine {
                 JSONObject()
                     .put("enable", true)
                     .put("ipv6", false)
+                    // Apply top-level hosts (ntc.party → IPv4) before network DNS.
+                    .put("use-hosts", true)
+                    .put("use-system-hosts", false)
                     // Real IPs (no Clash fake-ip): hev must not use mapdns 100.64/10,
                     // which Clash treats as private → DIRECT and breaks rule mode.
                     .put("enhanced-mode", "redir-host")
@@ -239,14 +249,21 @@ object MihomoEngine {
         val dest = File(src.parentFile, "${src.nameWithoutExtension}.runtime.yaml")
         var body = src.readText()
         // Ensure hosts map ntc.party → IPv4 of the same box (AAAA-only public DNS).
-        if (!Regex("""(?m)^hosts\s*:""").containsMatchIn(body)) {
-            body = body.trimEnd() + """
+        if (!body.contains("ntc.party:")) {
+            if (Regex("""(?m)^hosts\s*:""").containsMatchIn(body)) {
+                body = body.replaceFirst(
+                    Regex("""(?m)^hosts\s*:\s*\n"""),
+                    "hosts:\n  ntc.party: $NTC_PARTY_IPV4\n  www.ntc.party: $NTC_PARTY_IPV4\n  box.ntc.party: $NTC_PARTY_IPV4\n",
+                )
+            } else {
+                body = body.trimEnd() + """
 
 hosts:
   ntc.party: $NTC_PARTY_IPV4
   www.ntc.party: $NTC_PARTY_IPV4
   box.ntc.party: $NTC_PARTY_IPV4
 """
+            }
         }
         val insert = forceRules().joinToString("\n") { "  - $it" } + "\n"
         val match = RULES_SECTION.find(body)

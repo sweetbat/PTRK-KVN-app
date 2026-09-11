@@ -159,7 +159,9 @@ object ClashYaml {
                                 key == "reality-opts" || key == "ws-opts" ||
                                 key == "grpc-opts" || key == "smux" ||
                                 key == "tls" || key == "ech-opts" ||
-                                key == "brutal-opts" || key == "hysteria-opts"
+                                key == "brutal-opts" || key == "hysteria-opts" ||
+                                key == "xhttp-opts" || key == "http-opts" ||
+                                key == "httpupgrade-opts"
                             ) {
                                 fields[key] = "present"
                             }
@@ -247,7 +249,9 @@ object ClashYaml {
                                 key == "reality-opts" || key == "ws-opts" ||
                                 key == "grpc-opts" || key == "smux" ||
                                 key == "tls" || key == "ech-opts" ||
-                                key == "brutal-opts" || key == "hysteria-opts"
+                                key == "brutal-opts" || key == "hysteria-opts" ||
+                                key == "xhttp-opts" || key == "http-opts" ||
+                                key == "httpupgrade-opts"
                             ) {
                                 fields[key] = "present"
                             }
@@ -298,7 +302,14 @@ object ClashYaml {
             "h2", "http2" -> add("H2")
             "tcp" -> add("TCP")
             "udp" -> add("UDP")
-            "xhttp", "httpupgrade" -> add("JSON")
+            "xhttp" -> {
+                add("XHTTP")
+                add("JSON")
+            }
+            "httpupgrade" -> {
+                add("HTTPUPGRADE")
+                add("JSON")
+            }
             null, "" -> Unit
             else -> add(network.uppercase())
         }
@@ -324,9 +335,11 @@ object ClashYaml {
         if (fields["packet-encoding"] != null ||
             fields["xmux"] != null ||
             network == "xhttp" ||
+            network == "httpupgrade" ||
+            fields.containsKey("xhttp-opts") ||
+            fields.containsKey("httpupgrade-opts") ||
             fields["obfs"]?.contains("salamander", ignoreCase = true) == true ||
             fields.containsKey("brutal-opts") ||
-            // Remnawave / panel often labels Hysteria2 QUIC path as JSON in UIs.
             ((type == "hysteria2" || type == "hy2") &&
                 (fields.containsKey("quic") || fields["ports"] != null ||
                     fields["port-hopping"] != null || fields["hop-interval"] != null ||
@@ -337,6 +350,10 @@ object ClashYaml {
         // Hysteria2 is always TLS+QUIC; ensure both chips show even on minimal YAML.
         if (type == "hysteria2" || type == "hy2") {
             add("TLS")
+            add("JSON")
+        }
+        if (network == "xhttp" || fields.containsKey("xhttp-opts")) {
+            add("XHTTP")
             add("JSON")
         }
         return tags
