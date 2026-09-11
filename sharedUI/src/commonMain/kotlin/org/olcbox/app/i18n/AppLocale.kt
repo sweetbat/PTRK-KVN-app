@@ -74,7 +74,7 @@ object S {
     val later get() =
         if (ru) "\u041f\u043e\u0437\u0436\u0435" else "Later"
     val updateSubscription get() =
-        if (ru) "\u041e\u0431\u043d\u043e\u0432\u0438\u0442\u044c \u043f\u043e\u0434\u043f\u0438\u0441\u043a\u0443" else "Update subscription"
+        if (ru) "\u041e\u0431\u043d\u043e\u0432\u0438\u0442\u044c \u043f\u043e\u0434\u043f\u0438\u0441\u043a\u0438" else "Update subscriptions"
     val subscriptionUpdated get() =
         if (ru) "\u041f\u043e\u0434\u043f\u0438\u0441\u043a\u0430 \u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0430" else "Subscription updated"
     val traffic get() = if (ru) "\u0422\u0440\u0430\u0444\u0438\u043a" else "Traffic"

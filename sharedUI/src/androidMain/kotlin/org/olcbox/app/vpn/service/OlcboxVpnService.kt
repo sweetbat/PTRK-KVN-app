@@ -596,6 +596,7 @@ class OlcboxVpnService : VpnService() {
                 yamlPath = yamlPath,
                 selectedMap = mapOf("GLOBAL" to proxyName, "PROXY" to proxyName),
                 mode = mode,
+                selectedProxyName = proxyName,
             )
             addLog("Mihomo setupConfig: ${setup.take(160)}")
             if (setup.isNotBlank() &&

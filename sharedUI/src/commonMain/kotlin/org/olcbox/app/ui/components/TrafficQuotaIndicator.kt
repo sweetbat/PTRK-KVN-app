@@ -55,8 +55,11 @@ fun TrafficQuotaIndicator(
             )
         }
 
+        val usedFraction = (quota.usedBytes / quota.totalBytes)
+            .toFloat()
+            .coerceIn(0f, 1f)
         LinearProgressIndicator(
-            progress = { quota.remainingFraction },
+            progress = { usedFraction },
             modifier = Modifier
                 .fillMaxWidth()
                 .height(if (compact) 4.dp else 6.dp)

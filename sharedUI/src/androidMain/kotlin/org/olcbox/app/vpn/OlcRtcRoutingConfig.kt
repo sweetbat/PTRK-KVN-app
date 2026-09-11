@@ -25,6 +25,9 @@ object OlcRtcRoutingConfig {
         "DOMAIN-SUFFIX,speedtest.net,PROXY",
         "DOMAIN-SUFFIX,ookla.com,PROXY",
         "DOMAIN-SUFFIX,speedtestcustom.com,PROXY",
+        // IPv6-only forum: prefer home IP via olcRTC routing (exit often lacks IPv6).
+        "DOMAIN-SUFFIX,ntc.party,DIRECT",
+        "DOMAIN-KEYWORD,ntc.party,DIRECT",
     )
 
     fun outputFile(context: Context): File =
@@ -62,7 +65,7 @@ object OlcRtcRoutingConfig {
             appendLine("allow-lan: false")
             appendLine("mode: rule")
             appendLine("log-level: warning")
-            appendLine("ipv6: false")
+            appendLine("ipv6: true")
             appendLine("find-process-mode: off")
             appendLine("unified-delay: true")
             appendLine()

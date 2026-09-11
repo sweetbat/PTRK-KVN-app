@@ -850,7 +850,9 @@ class LocationsRepositoryImpl(
                 headers {
                     append(HttpHeaders.Accept, "text/yaml, text/plain, application/octet-stream, */*")
                     remove(HttpHeaders.UserAgent)
-                    append(HttpHeaders.UserAgent, "ClashMeta/1.19.0")
+                    append(HttpHeaders.UserAgent, org.olcbox.app.data.identity.RemnawaveDeviceIdentity.userAgent())
+                    append("x-device-os", "Android")
+                    append("x-device-model", org.olcbox.app.data.identity.RemnawaveDeviceIdentity.MODEL)
                     if (!hwid.isNullOrBlank()) append("x-hwid", hwid)
                 }
             }
@@ -882,16 +884,13 @@ class LocationsRepositoryImpl(
         if (usable(initial)) return initial
 
         val agents = listOf(
-            "ClashMeta/1.19.0",
-            "clash.meta/v1.19.0",
-            "mihomo/1.19.0",
-            "Clash",
+            org.olcbox.app.data.identity.RemnawaveDeviceIdentity.userAgent(),
         )
         val urlVariants = buildList {
-            add(url)
             val joiner = if ('?' in url) "&" else "?"
-            add("$url${joiner}flag=clash")
             add("$url${joiner}flag=meta")
+            add("$url${joiner}flag=clash")
+            add(url)
         }.distinct()
 
         for (candidateUrl in urlVariants) {
@@ -902,6 +901,8 @@ class LocationsRepositoryImpl(
                             append(HttpHeaders.Accept, "text/yaml, */*")
                             remove(HttpHeaders.UserAgent)
                             append(HttpHeaders.UserAgent, agent)
+                            append("x-device-os", "Android")
+                            append("x-device-model", org.olcbox.app.data.identity.RemnawaveDeviceIdentity.MODEL)
                             if (!hwid.isNullOrBlank()) append("x-hwid", hwid)
                         }
                     }.bodyAsText()
@@ -918,7 +919,12 @@ class LocationsRepositoryImpl(
                         headers {
                             append(HttpHeaders.Accept, "text/yaml, */*")
                             remove(HttpHeaders.UserAgent)
-                            append(HttpHeaders.UserAgent, "ClashMeta/1.19.0")
+                            append(
+                                HttpHeaders.UserAgent,
+                                org.olcbox.app.data.identity.RemnawaveDeviceIdentity.userAgent(),
+                            )
+                            append("x-device-os", "Android")
+                            append("x-device-model", org.olcbox.app.data.identity.RemnawaveDeviceIdentity.MODEL)
                         }
                     }.bodyAsText()
                 }.getOrNull()

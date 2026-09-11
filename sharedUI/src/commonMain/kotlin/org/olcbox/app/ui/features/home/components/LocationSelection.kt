@@ -128,22 +128,72 @@ fun LocationSelectorScreen(
                             }
                         }
 
-                        TrafficQuotaIndicator(
-                            used = subscription?.used,
-                            available = subscription?.available,
-                            modifier = Modifier.padding(horizontal = 4.dp)
-                        )
-
                         val announce = subscription?.displayAnnounce()
+                            ?: subscription?.displayDescription()
                         if (!announce.isNullOrBlank()) {
-                            Text(
-                                text = announce,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 3,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.padding(horizontal = 4.dp),
-                            )
+                            Surface(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.55f),
+                                border = BorderStroke(
+                                    1.dp,
+                                    MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
+                                ),
+                            ) {
+                                Text(
+                                    text = announce,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 4,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                )
+                            }
+                        }
+
+                        val trafficQuota = parseTrafficQuota(subscription?.used, subscription?.available)
+                        val unlimitedTraffic = when {
+                            trafficQuota != null -> null
+                            !subscription?.used.isNullOrBlank() && !subscription?.available.isNullOrBlank() ->
+                                org.olcbox.app.i18n.S.trafficSummary(subscription!!.used!!, subscription.available!!)
+                            !subscription?.used.isNullOrBlank() ->
+                                org.olcbox.app.i18n.S.localizeDataUnit(subscription!!.used!!)
+                            else -> null
+                        }
+                        if (trafficQuota != null || !unlimitedTraffic.isNullOrBlank()) {
+                            Surface(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.55f),
+                                border = BorderStroke(
+                                    1.dp,
+                                    MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
+                                ),
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                                ) {
+                                    Text(
+                                        text = org.olcbox.app.i18n.S.traffic,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    if (trafficQuota != null) {
+                                        TrafficQuotaIndicator(
+                                            used = subscription?.used,
+                                            available = subscription?.available,
+                                            modifier = Modifier.fillMaxWidth(),
+                                        )
+                                    } else if (!unlimitedTraffic.isNullOrBlank()) {
+                                        Text(
+                                            text = unlimitedTraffic,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                        )
+                                    }
+                                }
+                            }
                         }
 
                         val supportUrl = subscription?.supportUrl
@@ -404,8 +454,6 @@ private fun SubscriptionGroupHeader(
 ) {
     val first = locations.firstOrNull()
     val title = first?.subscriptionTitle().orEmpty().ifBlank { "Subscriptions" }
-    val description = first?.subscriptionDescription()
-    val details = first?.subscriptionDetails()
 
     Column(modifier = modifier.padding(start = 4.dp, top = 2.dp)) {
         Text(
@@ -416,25 +464,6 @@ private fun SubscriptionGroupHeader(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
-
-        if (!description.isNullOrBlank()) {
-            Text(
-                text = description,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
-
-        if (!details.isNullOrBlank()) {
-            Text(
-                text = details,
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1
-            )
-        }
     }
 }
 
@@ -522,34 +551,6 @@ private fun LocationItem.subscriptionTitle(): String {
         subscription?.icon?.takeIf { it.isNotBlank() },
         subscription?.name?.takeIf { it.isNotBlank() } ?: "Subscriptions"
     ).joinToString(" ")
-}
-
-private fun LocationItem.subscriptionDetails(): String? {
-    val subscription = metadata?.subscription ?: return null
-    val hasProgressQuota = parseTrafficQuota(subscription.used, subscription.available) != null
-
-    return listOfNotNull(
-        quotaText(subscription.used, subscription.available).takeUnless { hasProgressQuota },
-    ).joinToString(" · ").takeIf { it.isNotBlank() }
-}
-
-private fun LocationItem.subscriptionDescription(): String? {
-    val subscription = metadata?.subscription ?: return null
-    return subscription.displayDescription()
-}
-
-private fun quotaText(used: String?, available: String?): String? {
-    val usedRaw = used?.trim()?.takeIf { it.isNotBlank() }
-    val availRaw = available?.trim()?.takeIf { it.isNotBlank() }
-    return when {
-        usedRaw != null && availRaw != null ->
-            org.olcbox.app.i18n.S.trafficSummary(usedRaw, availRaw)
-        usedRaw != null ->
-            "${org.olcbox.app.i18n.S.localizeDataUnit(usedRaw)} ${org.olcbox.app.i18n.S.used}"
-        availRaw != null ->
-            org.olcbox.app.i18n.S.trafficRemainingLabel(availRaw)
-        else -> null
-    }
 }
 
 private fun plural(value: Long, unit: String): String {

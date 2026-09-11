@@ -15,6 +15,8 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -23,6 +25,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -140,7 +143,7 @@ fun LocationRow(
 
             val protocolTags = metadata?.protocolTags().orEmpty()
             if (protocolTags.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(6.dp))
+                Spacer(modifier = Modifier.height(4.dp))
                 ProtocolTagRow(tags = protocolTags)
             } else if (!description.isNullOrBlank()) {
                 Text(
@@ -169,28 +172,35 @@ fun LocationRow(
                 compact = true
             )
         }
-        
-        when {
-            isLoading -> {
-                ShimmeringPingSkeleton()
-            }
 
-            pingMs != null -> {
-                Text(
-                    text = "$pingMs ${org.olcbox.app.i18n.S.localizeDataUnit("ms")}",
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
+        Box(
+            modifier = Modifier.widthIn(min = 52.dp),
+            contentAlignment = Alignment.CenterEnd,
+        ) {
+            when {
+                isLoading -> {
+                    ShimmeringPingSkeleton()
+                }
 
-            isError -> {
-                Text(
-                    text = S.offline,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.error
-                )
+                pingMs != null -> {
+                    Text(
+                        text = "$pingMs ${org.olcbox.app.i18n.S.localizeDataUnit("ms")}",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                    )
+                }
+
+                isError -> {
+                    Text(
+                        text = S.offline,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.error,
+                        maxLines = 1,
+                    )
+                }
             }
         }
 
@@ -238,25 +248,27 @@ private fun locationSubtitle(location: LocationItem): String {
     ).joinToString(" · ")
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ProtocolTagRow(tags: List<String>) {
-    Row(
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.fillMaxWidth()
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalArrangement = Arrangement.spacedBy(3.dp),
+        modifier = Modifier.fillMaxWidth(),
     ) {
-        tags.take(5).forEach { tag ->
+        tags.take(6).forEach { tag ->
             val colors = protocolTagColors(tag)
             Text(
                 text = tag,
                 color = colors.first,
-                fontSize = 10.sp,
+                fontSize = 9.sp,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
+                softWrap = false,
                 modifier = Modifier
-                    .clip(RoundedCornerShape(6.dp))
+                    .clip(RoundedCornerShape(4.dp))
                     .background(colors.second)
-                    .padding(horizontal = 7.dp, vertical = 3.dp)
+                    .padding(horizontal = 5.dp, vertical = 2.dp),
             )
         }
     }

@@ -69,28 +69,19 @@ fun SubscriptionCard(
     val language by org.olcbox.app.i18n.AppLocale.language.collectAsState()
     @Suppress("UNUSED_EXPRESSION")
     language
-    val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
     val sub = location?.metadata?.subscription
     val urlToken = location?.subscriptionUrl
         ?.substringAfterLast('/')
         ?.trim()
         ?.takeIf { it.isNotBlank() }
+    // Never fall back to the selected leaf/server name (e.g. Finland) after refresh.
     val rawTitle = sub?.name?.trim()?.takeIf { it.isNotBlank() }
         ?.takeUnless { it == urlToken }
-    val title = (rawTitle
-        ?: location?.fullName?.takeUnless { it == urlToken || it.equals("regular", true) || it.equals("bypass", true) }
-        ?: org.olcbox.app.i18n.S.appName)
+    val title = (rawTitle ?: org.olcbox.app.i18n.S.appName)
         .removePrefix("Olc ")
         .removePrefix("olc ")
         .trim()
         .ifBlank { org.olcbox.app.i18n.S.appName }
-    val traffic = when {
-        !sub?.used.isNullOrBlank() && !sub?.available.isNullOrBlank() ->
-            org.olcbox.app.i18n.S.trafficSummary(sub!!.used!!, sub.available!!)
-        !sub?.used.isNullOrBlank() -> org.olcbox.app.i18n.S.localizeDataUnit(sub!!.used!!)
-        else -> null
-    }
-    val quota = org.olcbox.app.data.model.parseTrafficQuota(sub?.used, sub?.available)
     fun usableStatus(value: String?): String? {
         val v = value?.trim()?.takeIf { it.isNotBlank() } ?: return null
         if (v.equals("regular", ignoreCase = true) || v.equals("bypass", ignoreCase = true)) {
@@ -102,9 +93,6 @@ fun SubscriptionCard(
     val expire = usableStatus(sub?.description)
         ?.takeIf { it == "\u221e" || it == "∞" || it.contains('.') || it.contains('-') || it.any { ch -> ch.isDigit() } }
         ?: usableStatus(sub?.comment)?.takeIf { it.contains('.') || it == "\u221e" }
-    val announce = sub?.displayAnnounce()
-    val supportUrl = sub?.supportUrl
-    val webPageUrl = sub?.webPageUrl
     val engine = when {
         location?.config?.isMihomo() == true -> org.olcbox.app.i18n.S.mihomoEngine
         location != null -> org.olcbox.app.i18n.S.olcrtcEngine
@@ -160,39 +148,6 @@ fun SubscriptionCard(
                 )
             }
         }
-        if (!traffic.isNullOrBlank() || quota != null) {
-            Box(modifier = Modifier.height(12.dp))
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    Text(
-                        text = org.olcbox.app.i18n.S.traffic,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    if (!traffic.isNullOrBlank()) {
-                        Text(text = traffic, style = MaterialTheme.typography.bodySmall)
-                    }
-                }
-                org.olcbox.app.ui.components.TrafficQuotaIndicator(
-                    used = sub?.used,
-                    available = sub?.available,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
-        }
-        if (!announce.isNullOrBlank()) {
-            Box(modifier = Modifier.height(10.dp))
-            Text(
-                text = announce,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 3,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
         if (!expire.isNullOrBlank()) {
             Box(modifier = Modifier.height(8.dp))
             Text(
@@ -200,38 +155,6 @@ fun SubscriptionCard(
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-        }
-        if (!supportUrl.isNullOrBlank() || !webPageUrl.isNullOrBlank()) {
-            Box(modifier = Modifier.height(12.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                if (!supportUrl.isNullOrBlank()) {
-                    Text(
-                        text = org.olcbox.app.i18n.S.support,
-                        color = MaterialTheme.colorScheme.primary,
-                        style = MaterialTheme.typography.labelLarge,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(999.dp))
-                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
-                            .clickable { runCatching { uriHandler.openUri(supportUrl) } }
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                    )
-                }
-                if (!webPageUrl.isNullOrBlank()) {
-                    Text(
-                        text = org.olcbox.app.i18n.S.website,
-                        color = MaterialTheme.colorScheme.primary,
-                        style = MaterialTheme.typography.labelLarge,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(999.dp))
-                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
-                            .clickable { runCatching { uriHandler.openUri(webPageUrl) } }
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                    )
-                }
-            }
         }
         if (onRefreshClick != null && !location?.subscriptionUrl.isNullOrBlank()) {
             Box(modifier = Modifier.height(12.dp))

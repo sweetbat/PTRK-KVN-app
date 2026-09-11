@@ -1,5 +1,6 @@
 package org.olcbox.app.data.datasource
 
+import android.os.Build
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.ProxyBuilder
 import io.ktor.client.engine.okhttp.OkHttp
@@ -11,6 +12,7 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
+import org.olcbox.app.data.identity.RemnawaveDeviceIdentity
 import org.olcbox.app.data.repository.SubscriptionFetchProxy
 import java.net.Authenticator
 import java.net.PasswordAuthentication
@@ -19,8 +21,6 @@ import java.security.cert.X509Certificate
 import java.util.concurrent.TimeUnit
 import javax.net.ssl.SSLContext
 import javax.net.ssl.X509TrustManager
-
-private const val CLASH_USER_AGENT = "ClashMeta/1.19.0"
 
 internal actual fun createProxyHttpClient(
     subscriptionProxy: SubscriptionFetchProxy?,
@@ -35,7 +35,7 @@ internal actual fun createProxyHttpClient(
         requestTimeoutMs = requestTimeoutMs,
         socketTimeoutMs = socketTimeoutMs,
         insecureTrustManager = insecureTrustManager,
-        forceClashUserAgent = true,
+        pinSubscriptionHeaders = true,
     )
 
     return HttpClient(OkHttp) {
@@ -58,8 +58,8 @@ internal actual fun createProxyHttpClient(
 }
 
 /**
- * Direct OkHttp download that always sends ClashMeta UA (Remnawave returns YAML only then).
- * Bypasses Ktor header quirks that were causing JSON / base64 dumps.
+ * Direct OkHttp download that identifies as PTRK-KVN-app (panel / Telegram bot)
+ * and requests Clash YAML via ?flag=meta / ?flag=clash.
  */
 internal actual suspend fun downloadSubscriptionBodyDirect(
     url: String,
@@ -74,7 +74,7 @@ internal actual suspend fun downloadSubscriptionBodyDirect(
         requestTimeoutMs = requestTimeoutMs,
         socketTimeoutMs = socketTimeoutMs,
         insecureTrustManager = if (allowInsecureRequests) trustAllCertificatesManager() else null,
-        forceClashUserAgent = true,
+        pinSubscriptionHeaders = true,
     )
     try {
         fun usable(text: String): Boolean {
@@ -85,11 +85,16 @@ internal actual suspend fun downloadSubscriptionBodyDirect(
                 text.contains("olcrtc://", ignoreCase = true)
         }
 
+        val appAgent = RemnawaveDeviceIdentity.userAgent()
+
         fun fetch(target: String, agent: String, includeHwid: Boolean): DirectSubscriptionDownload? {
             val builder = Request.Builder()
                 .url(target)
                 .header("User-Agent", agent)
                 .header("Accept", "text/yaml, text/plain, application/octet-stream, */*")
+                .header("x-device-os", "Android")
+                .header("x-ver-os", Build.VERSION.RELEASE ?: "unknown")
+                .header("x-device-model", RemnawaveDeviceIdentity.MODEL)
             if (includeHwid && !hwid.isNullOrBlank()) {
                 builder.header("x-hwid", hwid)
             }
@@ -118,14 +123,15 @@ internal actual suspend fun downloadSubscriptionBodyDirect(
             }
         }
 
-        val agents = listOf(
-            CLASH_USER_AGENT,
-            "clash.meta/v1.19.0",
-            "mihomo/1.19.0",
-            "Clash",
-        )
+        // Prefer app identity so Remnawave HWID slots show PTRK-KVN-app, not ClashMeta.
+        // Format is forced with flag=meta / flag=clash query params.
+        val agents = listOf(appAgent)
         val joiner = if ('?' in url) "&" else "?"
-        val urls = listOf(url, "$url${joiner}flag=clash", "$url${joiner}flag=meta").distinct()
+        val urls = listOf(
+            "$url${joiner}flag=meta",
+            "$url${joiner}flag=clash",
+            url,
+        ).distinct()
 
         for (candidate in urls) {
             for (agent in agents) {
@@ -136,14 +142,13 @@ internal actual suspend fun downloadSubscriptionBodyDirect(
         if (!hwid.isNullOrBlank()) {
             for (candidate in urls) {
                 val downloaded = runCatching {
-                    fetch(candidate, CLASH_USER_AGENT, includeHwid = false)
+                    fetch(candidate, appAgent, includeHwid = false)
                 }.getOrNull()
                 if (downloaded != null && usable(downloaded.content)) return@withContext downloaded
             }
         }
 
-        // Last resort: return whatever ClashMeta gives so the caller can show a precise error.
-        fetch(url, CLASH_USER_AGENT, includeHwid = !hwid.isNullOrBlank())
+        fetch(urls.first(), appAgent, includeHwid = !hwid.isNullOrBlank())
             ?: error("Subscription server returned an empty response")
     } finally {
         client.dispatcher.executorService.shutdown()
@@ -245,7 +250,7 @@ private fun buildSubscriptionOkHttpClient(
     requestTimeoutMs: Long,
     socketTimeoutMs: Long,
     insecureTrustManager: X509TrustManager?,
-    forceClashUserAgent: Boolean,
+    pinSubscriptionHeaders: Boolean,
 ): OkHttpClient {
     val builder = OkHttpClient.Builder()
         .connectTimeout(connectTimeoutMs, TimeUnit.MILLISECONDS)
@@ -254,14 +259,26 @@ private fun buildSubscriptionOkHttpClient(
         .followRedirects(true)
         .followSslRedirects(true)
 
-    if (forceClashUserAgent) {
+    if (pinSubscriptionHeaders) {
         builder.addNetworkInterceptor { chain ->
             val original = chain.request()
             val host = original.url.host.lowercase()
             val next = original.newBuilder()
-                .header("User-Agent", CLASH_USER_AGENT)
+            val existingUa = original.header("User-Agent")
+            if (existingUa.isNullOrBlank()) {
+                next.header("User-Agent", RemnawaveDeviceIdentity.userAgent())
+            }
             if ("api.github.com" !in host && "github.com" !in host) {
                 next.header("Accept", "text/yaml, text/plain, */*")
+                if (original.header("x-device-os").isNullOrBlank()) {
+                    next.header("x-device-os", "Android")
+                }
+                if (original.header("x-ver-os").isNullOrBlank()) {
+                    next.header("x-ver-os", Build.VERSION.RELEASE ?: "unknown")
+                }
+                if (original.header("x-device-model").isNullOrBlank()) {
+                    next.header("x-device-model", RemnawaveDeviceIdentity.MODEL)
+                }
             }
             chain.proceed(next.build())
         }

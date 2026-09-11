@@ -55,6 +55,18 @@ object MihomoEngine {
         "DOMAIN-SUFFIX,speedtestcustom.com,GLOBAL",
     )
 
+    /** ntc.party is IPv6-only — via node when it has IPv6, otherwise home (DIRECT). */
+    private fun ntcPartyRules(viaGlobal: Boolean): List<String> {
+        val policy = if (viaGlobal) "GLOBAL" else "DIRECT"
+        return listOf(
+            "DOMAIN-SUFFIX,ntc.party,$policy",
+            "DOMAIN-KEYWORD,ntc.party,$policy",
+        )
+    }
+
+    private fun forceRules(ntcViaGlobal: Boolean): List<String> =
+        FORCE_VIA_GLOBAL_RULES + ntcPartyRules(ntcViaGlobal)
+
     suspend fun ensureInit(context: Context) {
         lock.withLock {
             if (initialized) return@withLock
@@ -86,17 +98,34 @@ object MihomoEngine {
         /** Plain DNS IPs for resolving proxy hosts (use carrier DNS on cellular). */
         bootstrapDns: List<String> = emptyList(),
         testUrl: String = DEFAULT_TEST_URL,
+        selectedProxyName: String? = null,
     ): String = lock.withLock {
         ensureInitUnlocked(context)
         this.mode = mode
         val selected = JSONObject()
         selectedMap.forEach { (k, v) -> selected.put(k, v) }
+        val proxyForIpv6 = selectedProxyName
+            ?: selectedMap["GLOBAL"]
+            ?: selectedMap["PROXY"]
+        val yamlBody = runCatching { File(yamlPath).readText() }.getOrNull().orEmpty()
+        val nodeHasIpv6 = proxyForIpv6
+            ?.takeIf { it.isNotBlank() }
+            ?.let { org.olcbox.app.data.model.ClashYaml.proxyHasIpv6(yamlBody, it) }
+            ?: false
+        // Enable stack IPv6 so DIRECT ntc.party can use home IPv6 when the VPS
+        // has no AAAA path; when the node has IPv6, ntc goes via GLOBAL.
+        val enableIpv6 = true
+        val ntcViaGlobal = nodeHasIpv6
+        Log.i(
+            TAG,
+            "setupProfile proxy=$proxyForIpv6 nodeIpv6=$nodeHasIpv6 ntc=${if (ntcViaGlobal) "GLOBAL" else "DIRECT"}",
+        )
         // No Xray-style TLS fragment in Mihomo: YouTube via DIRECT is broken under
         // RU throttling, so always pin youtube/googlevideo through GLOBAL (selected node).
         val configPath = if (mode.equals("global", ignoreCase = true)) {
             yamlPath
         } else {
-            runtimeConfigWithForcedProxyDomains(yamlPath)
+            runtimeConfigWithForcedProxyDomains(yamlPath, ntcViaGlobal)
         }
         // RKN TSPU hijacks UDP DNS to 8.8.8.8 / 1.1.1.1. Use carrier + Yandex,
         // and DoH over HTTPS (TCP) so nameserver lookups are not intercepted.
@@ -110,7 +139,7 @@ object MihomoEngine {
         }
         val overrides = JSONObject()
             .put("mode", mode)
-            .put("ipv6", false)
+            .put("ipv6", enableIpv6)
             .put("unified-delay", true)
             .put("tcp-concurrent", true)
             // Keep a local mixed-port so we can diagnose; VpnService path does not need it.
@@ -173,7 +202,7 @@ object MihomoEngine {
                 "dns",
                 JSONObject()
                     .put("enable", true)
-                    .put("ipv6", false)
+                    .put("ipv6", enableIpv6)
                     // Real IPs (no Clash fake-ip): hev must not use mapdns 100.64/10,
                     // which Clash treats as private → DIRECT and breaks rule mode.
                     .put("enhanced-mode", "redir-host")
@@ -188,7 +217,7 @@ object MihomoEngine {
         // Keep YouTube pin at the top even though MATCH,GLOBAL already covers it.
         if (mode.equals("global", ignoreCase = true)) {
             val rules = org.json.JSONArray()
-            FORCE_VIA_GLOBAL_RULES.forEach { rules.put(it) }
+            forceRules(ntcViaGlobal).forEach { rules.put(it) }
             rules.put("GEOIP,private,DIRECT,no-resolve")
             rules.put("MATCH,GLOBAL")
             overrides.put("rules", rules)
@@ -207,12 +236,15 @@ object MihomoEngine {
      * Prepend force-proxy rules so subscription DIRECT/whitelist cannot win.
      * Writes sibling `*.runtime.yaml` — original profile on disk stays untouched.
      */
-    private fun runtimeConfigWithForcedProxyDomains(yamlPath: String): String {
+    private fun runtimeConfigWithForcedProxyDomains(
+        yamlPath: String,
+        ntcViaGlobal: Boolean,
+    ): String {
         val src = File(yamlPath)
         if (!src.isFile) return yamlPath
         val dest = File(src.parentFile, "${src.nameWithoutExtension}.runtime.yaml")
         val body = src.readText()
-        val insert = FORCE_VIA_GLOBAL_RULES.joinToString("\n") { "  - $it" } + "\n"
+        val insert = forceRules(ntcViaGlobal).joinToString("\n") { "  - $it" } + "\n"
         val match = RULES_SECTION.find(body)
         val patched = if (match != null) {
             val lineEnd = body.indexOf('\n', match.range.last).let { if (it < 0) body.length else it + 1 }
@@ -221,7 +253,7 @@ object MihomoEngine {
             body.trimEnd() + "\n\nrules:\n" + insert
         }
         dest.writeText(patched)
-        Log.i(TAG, "Force-proxy domains via GLOBAL prepended -> ${dest.name}")
+        Log.i(TAG, "Force-proxy domains via GLOBAL prepended -> ${dest.name} ntc=${if (ntcViaGlobal) "GLOBAL" else "DIRECT"}")
         return dest.absolutePath
     }
 
@@ -335,7 +367,7 @@ object MihomoEngine {
     }
 
     /** Tell libclash VpnService is owning the tunnel (FlClash CoreState). */
-    fun setVpnState(enabled: Boolean = true) {
+    fun setVpnState(enabled: Boolean = true, ipv6: Boolean = true) {
         runCatching {
             val state = JSONObject()
                 .put(
@@ -344,7 +376,7 @@ object MihomoEngine {
                         .put("enable", enabled)
                         .put("system-proxy", false)
                         .put("allow-bypass", false)
-                        .put("ipv6", false),
+                        .put("ipv6", ipv6),
                 )
                 .put("only-statistics-proxy", false)
                 .put("current-profile-name", "PTRK-KVN")

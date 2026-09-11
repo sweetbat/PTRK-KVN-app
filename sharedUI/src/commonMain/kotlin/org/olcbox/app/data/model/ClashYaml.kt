@@ -171,6 +171,99 @@ object ClashYaml {
         return emptyList()
     }
 
+    /**
+     * True when the named leaf looks IPv6-capable (literal address or explicit opts).
+     * Used to decide whether IPv6-only sites (e.g. ntc.party) should exit via the node.
+     */
+    fun proxyHasIpv6(raw: String, proxyName: String): Boolean {
+        val fields = extractProxyFields(raw, proxyName) ?: return false
+        if (fields["ipv6"]?.equals("true", true) == true) return true
+        val ipVersion = fields["ip-version"]?.lowercase().orEmpty()
+        if (ipVersion.contains("6") && !ipVersion.contains("ipv4")) return true
+        if (looksLikeIpv6Host(fields["server"])) return true
+        if (looksLikeIpv6Host(fields["servername"])) return true
+        listOf("server-v6", "serverv6", "ipv6-addr", "ipv6").forEach { key ->
+            fields[key]?.takeIf { it.isNotBlank() && !it.equals("false", true) }?.let { return true }
+        }
+        return false
+    }
+
+    private fun extractProxyFields(raw: String, proxyName: String): Map<String, String>? {
+        val text = decode(raw)
+        val target = proxyName.trim()
+        if (target.isEmpty()) return null
+        val lines = text.lineSequence().toList()
+        var i = 0
+        var inProxies = false
+        while (i < lines.size) {
+            val line = lines[i]
+            val trimmed = line.trimEnd()
+            if (!inProxies) {
+                if (trimmed == "proxies:" || trimmed.startsWith("proxies:")) {
+                    inProxies = true
+                }
+                i++
+                continue
+            }
+            val indent = line.length - line.trimStart().length
+            val body = line.trim()
+            if (body.isNotEmpty() && indent == 0 && topLevelKey.containsMatchIn(body) &&
+                !body.startsWith("-") && !body.startsWith("#")
+            ) {
+                break
+            }
+            val nameMatch = Regex("""^\s*-\s*name:\s*(.+)\s*$""").matchEntire(line)
+                ?: Regex("""^\s*name:\s*(.+)\s*$""").matchEntire(line)?.takeIf {
+                    i > 0 && lines[i - 1].trimStart().startsWith("-")
+                }
+            if (nameMatch != null && unquote(nameMatch.groupValues[1]) == target) {
+                val fields = linkedMapOf<String, String>()
+                if (body.contains('{') && body.contains('}')) {
+                    Regex("""(\w[\w-]*)\s*:\s*([^,}]+)""")
+                        .findAll(body)
+                        .forEach { m ->
+                            fields[m.groupValues[1].lowercase()] = unquote(m.groupValues[2])
+                        }
+                } else {
+                    var j = i + 1
+                    while (j < lines.size) {
+                        val next = lines[j]
+                        val nextTrim = next.trim()
+                        val nextIndent = next.length - next.trimStart().length
+                        if (nextTrim.startsWith("- ") && nextIndent <= indent) break
+                        if (nextTrim.isNotEmpty() && nextIndent == 0 &&
+                            topLevelKey.containsMatchIn(nextTrim)
+                        ) break
+                        val kv = Regex("""^\s*([A-Za-z0-9_-]+)\s*:\s*(.*)$""").matchEntire(next)
+                        if (kv != null) {
+                            val key = kv.groupValues[1].lowercase()
+                            val value = unquote(kv.groupValues[2])
+                            if (value.isNotBlank() && value != "|" && value != ">") {
+                                fields[key] = value
+                            } else if (key == "reality-opts" || key == "ws-opts" ||
+                                key == "grpc-opts" || key == "smux"
+                            ) {
+                                fields[key] = "present"
+                            }
+                        }
+                        j++
+                    }
+                }
+                return fields
+            }
+            i++
+        }
+        return null
+    }
+
+    private fun looksLikeIpv6Host(value: String?): Boolean {
+        val host = value?.trim()?.removePrefix("[")?.substringBefore(']')?.substringBefore('%')
+            ?.takeIf { it.isNotBlank() }
+            ?: return false
+        if (host.count { it == ':' } < 2) return false
+        return host.any { it.isDigit() || it in 'a'..'f' || it in 'A'..'F' }
+    }
+
     private fun buildProtocolTags(fields: Map<String, String>): List<String> {
         val tags = mutableListOf<String>()
         fun add(tag: String?) {
