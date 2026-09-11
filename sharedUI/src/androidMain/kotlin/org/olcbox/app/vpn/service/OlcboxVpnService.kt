@@ -636,19 +636,20 @@ class OlcboxVpnService : VpnService() {
             if (requestedGeneration != generation) return
 
             delay(TUNNEL_HANDOFF_DELAY_MS)
-            // No hev mapdns: its 100.64/10 answers hit GEOIP,private → DIRECT and
-            // make rule-mode look like "everything is home IP".
+            // hev mapdns → 100.64/10 fake IPs; MihomoEngine force-rules send that range
+            // to GLOBAL/PROXY (not GEOIP,private,DIRECT) so sniffer can domain-dial
+            // AAAA-only sites like ntc.party on every protocol.
             val pfd = establishSystemVpnTunnel(
-                dnsServers = RuSafeDns.YANDEX_PLAIN,
+                dnsServers = listOf(MAPDNS_ADDRESS),
                 extraBypassPackages = torrentBypassPackages(),
-                useMapDns = false,
+                useMapDns = true,
             )
             if (pfd == null) {
                 stopMihomoTun()
                 return
             }
             vpnInterface = pfd
-            if (!startTun2socks(pfd, useMapDns = false)) {
+            if (!startTun2socks(pfd, useMapDns = true)) {
                 stopMihomoTun()
                 cleanupVpnInterface()
                 return
@@ -670,7 +671,7 @@ class OlcboxVpnService : VpnService() {
             setStatus(VpnStatus.Connected)
             resetRecoveryState()
             updateNotification(connectedNotificationText())
-            addLog("Mihomo VPN tunnel established (hev→mixed-port)")
+            addLog("Mihomo VPN tunnel established (hev mapdns→mixed-port)")
             startWatchdog()
         } catch (e: CancellationException) {
             withContext(NonCancellable) {

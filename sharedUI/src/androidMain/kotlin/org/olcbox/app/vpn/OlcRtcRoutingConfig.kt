@@ -25,6 +25,8 @@ object OlcRtcRoutingConfig {
         "DOMAIN-SUFFIX,speedtest.net,PROXY",
         "DOMAIN-SUFFIX,ookla.com,PROXY",
         "DOMAIN-SUFFIX,speedtestcustom.com,PROXY",
+        // hev mapdns 100.64/10 must not hit GEOIP,private → DIRECT.
+        "IP-CIDR,100.64.0.0/10,PROXY,no-resolve",
         // ntc.party AAAA-only: force via tunnel (any routing mode).
         "DOMAIN,ntc.party,PROXY",
         "DOMAIN-SUFFIX,ntc.party,PROXY",
@@ -69,13 +71,13 @@ object OlcRtcRoutingConfig {
             appendLine("allow-lan: false")
             appendLine("mode: rule")
             appendLine("log-level: warning")
-            appendLine("ipv6: true")
+            appendLine("ipv6: false")
             appendLine("find-process-mode: off")
             appendLine("unified-delay: true")
             appendLine()
             appendLine("dns:")
             appendLine("  enable: true")
-            appendLine("  ipv6: true")
+            appendLine("  ipv6: false")
             appendLine("  use-hosts: true")
             appendLine("  use-system-hosts: false")
             appendLine("  enhanced-mode: redir-host")

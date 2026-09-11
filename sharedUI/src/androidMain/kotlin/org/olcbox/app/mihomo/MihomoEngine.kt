@@ -56,14 +56,19 @@ object MihomoEngine {
     )
 
     /**
-     * ntc.party is AAAA-only (2a02:e00:ffec:4b8::1). Android VPN already has an IPv6
-     * TUN (::/0), so we must NOT pin hosts to IPv4/fake-ip — that broke VLESS/olcRTC.
-     * Enable clash+dns IPv6, force DOMAIN/IP-CIDR6 via the selected node in any mode.
+     * Always via selected node. hev mapdns returns 100.64/10 fake IPs; without this
+     * rule GEOIP,private→DIRECT blackholes them (that is why mapdns was disabled).
+     * Sniffer then restores the domain and the node dials real AAAA for ntc.party etc.
      */
+    private val MAPDNS_VIA_NODE_RULES = listOf(
+        "IP-CIDR,100.64.0.0/10,GLOBAL,no-resolve",
+        "IP-CIDR,100.64.0.0/10,PROXY,no-resolve",
+    )
+
     private const val NTC_PARTY_IPV4 = "130.255.77.28"
     private const val NTC_PARTY_IPV6 = "2a02:e00:ffec:4b8::1"
 
-    /** Always via selected node — works with routing on (rule) or off (global). */
+    /** Belt-and-suspenders for ntc.party (AAAA-only) in any routing mode. */
     private fun ntcPartyRules(): List<String> = listOf(
         "DOMAIN,ntc.party,GLOBAL",
         "DOMAIN-SUFFIX,ntc.party,GLOBAL",
@@ -78,7 +83,7 @@ object MihomoEngine {
     )
 
     private fun forceRules(): List<String> =
-        FORCE_VIA_GLOBAL_RULES + ntcPartyRules()
+        MAPDNS_VIA_NODE_RULES + FORCE_VIA_GLOBAL_RULES + ntcPartyRules()
 
     suspend fun ensureInit(context: Context) {
         lock.withLock {
@@ -120,10 +125,9 @@ object MihomoEngine {
         val proxyForLog = selectedProxyName
             ?: selectedMap["GLOBAL"]
             ?: selectedMap["PROXY"]
-        // ntc.party = AAAA-only; VPN TUN already routes IPv6. No hosts pin.
-        Log.i(TAG, "setupProfile proxy=$proxyForLog ntc=GLOBAL ipv6/AAAA=$NTC_PARTY_IPV6")
-        // Always write a runtime profile so stale ntc hosts from older betas are stripped
-        // even when mode=global (rules still come from overrides below).
+        // hev mapdns (100.64/10) + sniffer domain dial: works for Hy2 and VLESS/gRPC,
+        // including AAAA-only ntc.party. MAPDNS_VIA_NODE_RULES must stay first.
+        Log.i(TAG, "setupProfile proxy=$proxyForLog mapdns→GLOBAL ntc=domain-dial")
         val configPath = runtimeConfigWithForcedProxyDomains(yamlPath)
         // RKN TSPU hijacks UDP DNS to 8.8.8.8 / 1.1.1.1. Use carrier + Yandex,
         // and DoH over HTTPS (TCP) so nameserver lookups are not intercepted.
@@ -137,7 +141,7 @@ object MihomoEngine {
         }
         val overrides = JSONObject()
             .put("mode", mode)
-            .put("ipv6", true)
+            .put("ipv6", false)
             .put("unified-delay", true)
             .put("tcp-concurrent", true)
             // Keep a local mixed-port so we can diagnose; VpnService path does not need it.
@@ -208,10 +212,10 @@ object MihomoEngine {
                 "dns",
                 JSONObject()
                     .put("enable", true)
-                    // Return AAAA for ntc.party (public DNS has no A record).
-                    .put("ipv6", true)
+                    .put("ipv6", false)
                     .put("use-hosts", true)
                     .put("use-system-hosts", false)
+                    // redir-host: hev mapdns supplies fake IPs; sniffer restores domains.
                     .put("enhanced-mode", "redir-host")
                     .put("listen", "0.0.0.0:1053")
                     .put("nameserver", nameServersJson)
@@ -247,22 +251,13 @@ object MihomoEngine {
         if (!src.isFile) return yamlPath
         val dest = File(src.parentFile, "${src.nameWithoutExtension}.runtime.yaml")
         var body = src.readText()
-        // Strip any stale ntc hosts (IPv4 / fake-ip) from older betas — they break AAAA.
+        // Strip stale ntc hosts from older betas (IPv4/fake-ip pins).
         body = body
             .replace(Regex("""(?m)^\s*ntc\.party:\s*.*\r?\n"""), "")
             .replace(Regex("""(?m)^\s*www\.ntc\.party:\s*.*\r?\n"""), "")
             .replace(Regex("""(?m)^\s*box\.ntc\.party:\s*.*\r?\n"""), "")
-        // Ensure ipv6 is on so AAAA answers/dials work through the IPv6 TUN.
         if (Regex("""(?m)^ipv6\s*:""").containsMatchIn(body)) {
-            body = body.replace(Regex("""(?m)^ipv6\s*:\s*\S+"""), "ipv6: true")
-        } else {
-            body = "ipv6: true\n$body"
-        }
-        // dns.ipv6 in profile if present
-        if (Regex("""(?m)^\s*ipv6\s*:\s*(false|no)\s*$""").containsMatchIn(body)) {
-            // Only flip dns-section-ish false ipv6 that sits under indented dns — already
-            // handled top-level above; leave nested replacements soft:
-            body = body.replace(Regex("""(?m)^(\s+)ipv6\s*:\s*false\s*$"""), "$1ipv6: true")
+            body = body.replace(Regex("""(?m)^ipv6\s*:\s*\S+"""), "ipv6: false")
         }
         val insert = forceRules().joinToString("\n") { "  - $it" } + "\n"
         val match = RULES_SECTION.find(body)
@@ -273,7 +268,7 @@ object MihomoEngine {
             body.trimEnd() + "\n\nrules:\n" + insert
         }
         dest.writeText(patched)
-        Log.i(TAG, "Force-proxy domains via GLOBAL prepended -> ${dest.name} ntc=GLOBAL+AAAA")
+        Log.i(TAG, "Force-proxy domains via GLOBAL prepended -> ${dest.name} mapdns+ntc")
         return dest.absolutePath
     }
 
