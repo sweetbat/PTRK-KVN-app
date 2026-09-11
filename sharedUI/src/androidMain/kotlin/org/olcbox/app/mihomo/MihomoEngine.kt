@@ -56,41 +56,29 @@ object MihomoEngine {
     )
 
     /**
-     * ntc.party is AAAA-only in public DNS. hev is IPv4-only, so we map the name to a
-     * Clash fake-ip (198.18/16). Sniffer/DNS-mapping then sends the *domain* to the
-     * selected node; the VPS resolves AAAA. Mapping to the real box IPv4 made Hy2
-     * (UDP) work but VLESS/gRPC dialed that IPv4 over TCP and failed.
+     * ntc.party is AAAA-only (2a02:e00:ffec:4b8::1). Android VPN already has an IPv6
+     * TUN (::/0), so we must NOT pin hosts to IPv4/fake-ip — that broke VLESS/olcRTC.
+     * Enable clash+dns IPv6, force DOMAIN/IP-CIDR6 via the selected node in any mode.
      */
-    private const val NTC_PARTY_FAKE_IP = "198.18.0.53"
     private const val NTC_PARTY_IPV4 = "130.255.77.28"
     private const val NTC_PARTY_IPV6 = "2a02:e00:ffec:4b8::1"
 
-    /** ntc.party must always exit via the selected node (GLOBAL), never DIRECT. */
+    /** Always via selected node — works with routing on (rule) or off (global). */
     private fun ntcPartyRules(): List<String> = listOf(
         "DOMAIN,ntc.party,GLOBAL",
         "DOMAIN-SUFFIX,ntc.party,GLOBAL",
         "DOMAIN-KEYWORD,ntc.party,GLOBAL",
-        // Fake-ip from hosts — must not fall through to GEOIP,private,DIRECT.
-        "IP-CIDR,$NTC_PARTY_FAKE_IP/32,GLOBAL,no-resolve",
-        "IP-CIDR,198.18.0.0/16,GLOBAL,no-resolve",
-        "IP-CIDR,$NTC_PARTY_IPV4/32,GLOBAL,no-resolve",
         "IP-CIDR6,$NTC_PARTY_IPV6/128,GLOBAL,no-resolve",
+        "IP-CIDR6,2a02:e00:ffec:4b8::/64,GLOBAL,no-resolve",
+        "IP-CIDR,$NTC_PARTY_IPV4/32,GLOBAL,no-resolve",
         "DOMAIN,ntc.party,PROXY",
         "DOMAIN-SUFFIX,ntc.party,PROXY",
-        "IP-CIDR,$NTC_PARTY_FAKE_IP/32,PROXY,no-resolve",
-        "IP-CIDR,198.18.0.0/16,PROXY,no-resolve",
-        "IP-CIDR,$NTC_PARTY_IPV4/32,PROXY,no-resolve",
         "IP-CIDR6,$NTC_PARTY_IPV6/128,PROXY,no-resolve",
+        "IP-CIDR,$NTC_PARTY_IPV4/32,PROXY,no-resolve",
     )
 
     private fun forceRules(): List<String> =
         FORCE_VIA_GLOBAL_RULES + ntcPartyRules()
-
-    private fun ntcPartyHosts(): JSONObject =
-        JSONObject()
-            .put("ntc.party", NTC_PARTY_FAKE_IP)
-            .put("www.ntc.party", NTC_PARTY_FAKE_IP)
-            .put("box.ntc.party", NTC_PARTY_FAKE_IP)
 
     suspend fun ensureInit(context: Context) {
         lock.withLock {
@@ -132,15 +120,11 @@ object MihomoEngine {
         val proxyForLog = selectedProxyName
             ?: selectedMap["GLOBAL"]
             ?: selectedMap["PROXY"]
-        // ntc.party: local fake-ip (hev IPv4) → sniffer sends domain to node → VPS AAAA.
-        Log.i(TAG, "setupProfile proxy=$proxyForLog ntc=GLOBAL fake-ip=$NTC_PARTY_FAKE_IP")
-        // No Xray-style TLS fragment in Mihomo: YouTube via DIRECT is broken under
-        // RU throttling, so always pin youtube/googlevideo through GLOBAL (selected node).
-        val configPath = if (mode.equals("global", ignoreCase = true)) {
-            yamlPath
-        } else {
-            runtimeConfigWithForcedProxyDomains(yamlPath)
-        }
+        // ntc.party = AAAA-only; VPN TUN already routes IPv6. No hosts pin.
+        Log.i(TAG, "setupProfile proxy=$proxyForLog ntc=GLOBAL ipv6/AAAA=$NTC_PARTY_IPV6")
+        // Always write a runtime profile so stale ntc hosts from older betas are stripped
+        // even when mode=global (rules still come from overrides below).
+        val configPath = runtimeConfigWithForcedProxyDomains(yamlPath)
         // RKN TSPU hijacks UDP DNS to 8.8.8.8 / 1.1.1.1. Use carrier + Yandex,
         // and DoH over HTTPS (TCP) so nameserver lookups are not intercepted.
         val plainDns = org.olcbox.app.vpn.RuSafeDns.plainBootstrap(bootstrapDns)
@@ -153,10 +137,9 @@ object MihomoEngine {
         }
         val overrides = JSONObject()
             .put("mode", mode)
-            .put("ipv6", false)
+            .put("ipv6", true)
             .put("unified-delay", true)
             .put("tcp-concurrent", true)
-            .put("hosts", ntcPartyHosts())
             // Keep a local mixed-port so we can diagnose; VpnService path does not need it.
             .put("mixed-port", 7890)
             .put(
@@ -182,7 +165,6 @@ object MihomoEngine {
                     .put("enable", true)
                     .put("force-dns-mapping", true)
                     .put("parse-pure-ip", true)
-                    // Send sniffed domain to proxy (VPS resolves AAAA for ntc.party).
                     .put("override-destination", true)
                     .put(
                         "force-domain",
@@ -226,12 +208,11 @@ object MihomoEngine {
                 "dns",
                 JSONObject()
                     .put("enable", true)
-                    .put("ipv6", false)
+                    // Return AAAA for ntc.party (public DNS has no A record).
+                    .put("ipv6", true)
                     .put("use-hosts", true)
                     .put("use-system-hosts", false)
-                    // redir-host + hosts in fake-ip-range: IP→domain mapping, dial by name.
                     .put("enhanced-mode", "redir-host")
-                    .put("fake-ip-range", "198.18.0.1/16")
                     .put("listen", "0.0.0.0:1053")
                     .put("nameserver", nameServersJson)
                     .put("default-nameserver", plainDnsJson)
@@ -266,29 +247,22 @@ object MihomoEngine {
         if (!src.isFile) return yamlPath
         val dest = File(src.parentFile, "${src.nameWithoutExtension}.runtime.yaml")
         var body = src.readText()
-        // ntc.party → fake-ip so sniffer/DNS-mapping dials by domain through the node.
-        val hostsBlock = """
-hosts:
-  ntc.party: $NTC_PARTY_FAKE_IP
-  www.ntc.party: $NTC_PARTY_FAKE_IP
-  box.ntc.party: $NTC_PARTY_FAKE_IP
-""".trimIndent()
-        if (Regex("""(?m)^hosts\s*:""").containsMatchIn(body)) {
-            body = body
-                .replace(Regex("""(?m)^(\s*)ntc\.party:\s*.*$"""), "$1ntc.party: $NTC_PARTY_FAKE_IP")
-                .replace(Regex("""(?m)^(\s*)www\.ntc\.party:\s*.*$"""), "$1www.ntc.party: $NTC_PARTY_FAKE_IP")
-                .replace(Regex("""(?m)^(\s*)box\.ntc\.party:\s*.*$"""), "$1box.ntc.party: $NTC_PARTY_FAKE_IP")
-            if (!body.contains("ntc.party:")) {
-                body = body.replaceFirst(
-                    Regex("""(?m)^hosts\s*:\s*\n"""),
-                    "hosts:\n  ntc.party: $NTC_PARTY_FAKE_IP\n  www.ntc.party: $NTC_PARTY_FAKE_IP\n  box.ntc.party: $NTC_PARTY_FAKE_IP\n",
-                )
-            }
-        } else {
-            body = body.trimEnd() + "\n\n" + hostsBlock + "\n"
-        }
+        // Strip any stale ntc hosts (IPv4 / fake-ip) from older betas — they break AAAA.
+        body = body
+            .replace(Regex("""(?m)^\s*ntc\.party:\s*.*\r?\n"""), "")
+            .replace(Regex("""(?m)^\s*www\.ntc\.party:\s*.*\r?\n"""), "")
+            .replace(Regex("""(?m)^\s*box\.ntc\.party:\s*.*\r?\n"""), "")
+        // Ensure ipv6 is on so AAAA answers/dials work through the IPv6 TUN.
         if (Regex("""(?m)^ipv6\s*:""").containsMatchIn(body)) {
-            body = body.replace(Regex("""(?m)^ipv6\s*:\s*\S+"""), "ipv6: false")
+            body = body.replace(Regex("""(?m)^ipv6\s*:\s*\S+"""), "ipv6: true")
+        } else {
+            body = "ipv6: true\n$body"
+        }
+        // dns.ipv6 in profile if present
+        if (Regex("""(?m)^\s*ipv6\s*:\s*(false|no)\s*$""").containsMatchIn(body)) {
+            // Only flip dns-section-ish false ipv6 that sits under indented dns — already
+            // handled top-level above; leave nested replacements soft:
+            body = body.replace(Regex("""(?m)^(\s+)ipv6\s*:\s*false\s*$"""), "$1ipv6: true")
         }
         val insert = forceRules().joinToString("\n") { "  - $it" } + "\n"
         val match = RULES_SECTION.find(body)
@@ -299,7 +273,7 @@ hosts:
             body.trimEnd() + "\n\nrules:\n" + insert
         }
         dest.writeText(patched)
-        Log.i(TAG, "Force-proxy domains via GLOBAL prepended -> ${dest.name} ntc=GLOBAL+fake-ip=$NTC_PARTY_FAKE_IP")
+        Log.i(TAG, "Force-proxy domains via GLOBAL prepended -> ${dest.name} ntc=GLOBAL+AAAA")
         return dest.absolutePath
     }
 

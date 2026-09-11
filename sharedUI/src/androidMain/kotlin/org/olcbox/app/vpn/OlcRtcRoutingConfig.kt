@@ -25,14 +25,13 @@ object OlcRtcRoutingConfig {
         "DOMAIN-SUFFIX,speedtest.net,PROXY",
         "DOMAIN-SUFFIX,ookla.com,PROXY",
         "DOMAIN-SUFFIX,speedtestcustom.com,PROXY",
-        // ntc.party: fake-ip locally, dial domain via tunnel (VPS resolves AAAA).
+        // ntc.party AAAA-only: force via tunnel (any routing mode).
         "DOMAIN,ntc.party,PROXY",
         "DOMAIN-SUFFIX,ntc.party,PROXY",
         "DOMAIN-KEYWORD,ntc.party,PROXY",
-        "IP-CIDR,198.18.0.53/32,PROXY,no-resolve",
-        "IP-CIDR,198.18.0.0/16,PROXY,no-resolve",
-        "IP-CIDR,130.255.77.28/32,PROXY,no-resolve",
         "IP-CIDR6,2a02:e00:ffec:4b8::1/128,PROXY,no-resolve",
+        "IP-CIDR6,2a02:e00:ffec:4b8::/64,PROXY,no-resolve",
+        "IP-CIDR,130.255.77.28/32,PROXY,no-resolve",
     )
 
     fun outputFile(context: Context): File =
@@ -70,22 +69,16 @@ object OlcRtcRoutingConfig {
             appendLine("allow-lan: false")
             appendLine("mode: rule")
             appendLine("log-level: warning")
-            appendLine("ipv6: false")
+            appendLine("ipv6: true")
             appendLine("find-process-mode: off")
             appendLine("unified-delay: true")
             appendLine()
-            appendLine("hosts:")
-            appendLine("  ntc.party: 198.18.0.53")
-            appendLine("  www.ntc.party: 198.18.0.53")
-            appendLine("  box.ntc.party: 198.18.0.53")
-            appendLine()
             appendLine("dns:")
             appendLine("  enable: true")
-            appendLine("  ipv6: false")
+            appendLine("  ipv6: true")
             appendLine("  use-hosts: true")
             appendLine("  use-system-hosts: false")
             appendLine("  enhanced-mode: redir-host")
-            appendLine("  fake-ip-range: 198.18.0.1/16")
             appendLine()
             appendLine("sniffer:")
             appendLine("  enable: true")
