@@ -34,6 +34,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import org.olcbox.app.data.model.PtrkSubscriptionCompanion
 import org.olcbox.app.data.model.SubscriptionMetadata
 import org.olcbox.app.data.model.parseTrafficQuota
 import org.olcbox.app.ui.features.locations.LocationItem
@@ -59,10 +60,20 @@ fun LocationSelectorScreen(
 ) {
     Column(modifier = modifier.fillMaxWidth()) {
         val subscriptionLocations = locations.filter { !it.subscriptionUrl.isNullOrBlank() }
+        // Mihomo / drink (PTRK-KVN) groups always above olcRTC (olcsub) groups.
         val subscriptionGroups = subscriptionLocations
             .groupBy { it.subscriptionGroupKey() }
-            .values
-            .toList()
+            .entries
+            .sortedWith(
+                compareBy<Map.Entry<String, List<LocationItem>>> { entry ->
+                    if (PtrkSubscriptionCompanion.isOlcSubUrl(entry.value.firstOrNull()?.subscriptionUrl)) {
+                        1
+                    } else {
+                        0
+                    }
+                }.thenBy { it.key }
+            )
+            .map { it.value }
         val customLocations = locations.filter { it.subscriptionUrl.isNullOrBlank() }
 
         if (locations.isEmpty()) {

@@ -215,8 +215,26 @@ class LocationsRepositoryImpl(
     }
 
     private suspend fun saveBundleUnlocked(bundle: LocationBundleV4) {
-        dataSource.saveLocationBundle(bundle.normalized())
+        val ordered = bundle.copy(
+            locations = bundle.locations.withOlcRtcSubscriptionsLast()
+        )
+        dataSource.saveLocationBundle(ordered.normalized())
         _changes.value = _changes.value + 1
+    }
+
+    /**
+     * Keep Remnawave / Mihomo (drink) subscription groups above olcRTC (olcsub).
+     * Import/refresh used to reorder the list and flip the two PTRK cards.
+     */
+    private fun List<LocationEntry>.withOlcRtcSubscriptionsLast(): List<LocationEntry> {
+        if (size < 2) return this
+        return mapIndexed { index, entry -> index to entry }
+            .sortedWith(
+                compareBy<Pair<Int, LocationEntry>> { (_, entry) ->
+                    if (PtrkSubscriptionCompanion.isOlcSubUrl(entry.subscriptionUrl)) 1 else 0
+                }.thenBy { it.first }
+            )
+            .map { it.second }
     }
 
     override suspend fun exportBundle(): String {
