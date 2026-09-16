@@ -1974,11 +1974,19 @@ class OlcboxVpnService : VpnService() {
 
     private fun setStatus(status: VpnStatus) {
         when (status) {
-            VpnStatus.Connected -> org.olcbox.app.vpn.VpnConnectedSinceStore.markConnected(applicationContext)
-            VpnStatus.Disconnected, is VpnStatus.Error ->
+            VpnStatus.Connected -> {
+                org.olcbox.app.vpn.VpnConnectedSinceStore.markConnected(applicationContext)
+                org.olcbox.app.vpn.VpnServiceStatusStore.markConnected(applicationContext)
+            }
+            VpnStatus.Disconnected, is VpnStatus.Error -> {
                 org.olcbox.app.vpn.VpnConnectedSinceStore.clear(applicationContext)
-            VpnStatus.Stopping ->
-                org.olcbox.app.vpn.VpnConnectedSinceStore.clear(applicationContext)
+                org.olcbox.app.vpn.VpnServiceStatusStore.clear(applicationContext)
+            }
+            VpnStatus.Stopping -> {
+                // Only clear sticky markers when this is a real user stop, not a
+                // brief reconnect handoff — cleanup always goes Disconnected after.
+                Unit
+            }
             else -> Unit
         }
         OlcboxVpnState.setStatus(status)

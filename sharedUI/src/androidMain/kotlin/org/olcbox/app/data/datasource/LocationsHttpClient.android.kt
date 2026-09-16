@@ -13,12 +13,10 @@ import okhttp3.Request
 import okhttp3.Response
 import org.olcbox.app.data.identity.RemnawaveDeviceIdentity
 import org.olcbox.app.data.repository.SubscriptionFetchProxy
-import android.content.Context
-import android.net.ConnectivityManager
-import android.net.Network
-import android.net.NetworkCapabilities
 import java.net.Authenticator
+import java.net.InetSocketAddress
 import java.net.PasswordAuthentication
+import java.net.Proxy
 import java.security.SecureRandom
 import java.security.cert.X509Certificate
 import java.util.concurrent.TimeUnit
@@ -39,17 +37,15 @@ internal actual fun createProxyHttpClient(
         socketTimeoutMs = socketTimeoutMs,
         insecureTrustManager = insecureTrustManager,
         pinSubscriptionHeaders = true,
+        subscriptionProxy = subscriptionProxy,
     )
 
     return HttpClient(OkHttp) {
         expectSuccess = false
 
         engine {
-            // Ktor's engine.config { addNetworkInterceptor } is unreliable — pin via preconfigured.
+            // Proxy is already on the preconfigured OkHttp client when VPN is up.
             preconfigured = okHttp
-            if (subscriptionProxy != null) {
-                proxy = ProxyBuilder.socks(subscriptionProxy.host, subscriptionProxy.port)
-            }
         }
 
         install(HttpTimeout) {
@@ -71,6 +67,7 @@ internal actual suspend fun downloadSubscriptionBodyDirect(
     connectTimeoutMs: Long,
     requestTimeoutMs: Long,
     socketTimeoutMs: Long,
+    subscriptionProxy: SubscriptionFetchProxy?,
 ): DirectSubscriptionDownload = withContext(Dispatchers.IO) {
     val client = buildSubscriptionOkHttpClient(
         connectTimeoutMs = connectTimeoutMs,
@@ -78,6 +75,7 @@ internal actual suspend fun downloadSubscriptionBodyDirect(
         socketTimeoutMs = socketTimeoutMs,
         insecureTrustManager = if (allowInsecureRequests) trustAllCertificatesManager() else null,
         pinSubscriptionHeaders = true,
+        subscriptionProxy = subscriptionProxy,
     )
     try {
         fun usable(text: String): Boolean = isUsableSubscriptionBody(text)
@@ -314,6 +312,7 @@ private fun buildSubscriptionOkHttpClient(
     socketTimeoutMs: Long,
     insecureTrustManager: X509TrustManager?,
     pinSubscriptionHeaders: Boolean,
+    subscriptionProxy: SubscriptionFetchProxy? = null,
 ): OkHttpClient {
     val builder = OkHttpClient.Builder()
         .connectTimeout(connectTimeoutMs, TimeUnit.MILLISECONDS)
@@ -322,10 +321,17 @@ private fun buildSubscriptionOkHttpClient(
         .followRedirects(true)
         .followSslRedirects(true)
 
-    // Always leave the VpnService TUN for sub downloads (whitelist / olcRTC / Mihomo).
-    findUpstreamNetwork()?.let { network ->
-        builder.socketFactory(network.socketFactory)
-        android.util.Log.i("SubDownload", "bound OkHttp to upstream $network")
+    if (subscriptionProxy != null) {
+        builder.proxy(
+            Proxy(
+                Proxy.Type.SOCKS,
+                InetSocketAddress(subscriptionProxy.host, subscriptionProxy.port),
+            )
+        )
+        android.util.Log.i(
+            "SubDownload",
+            "OkHttp via SOCKS ${subscriptionProxy.host}:${subscriptionProxy.port}",
+        )
     }
 
     if (pinSubscriptionHeaders) {
@@ -362,28 +368,6 @@ private fun buildSubscriptionOkHttpClient(
     }
 
     return builder.build()
-}
-
-/** Wi‑Fi/cellular under the VPN — used so subscription refresh works with whitelist on. */
-private fun findUpstreamNetwork(): Network? {
-    val app = org.olcbox.app.data.mihomo.MihomoAndroidContext.app ?: return null
-    val cm = app.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-        ?: return null
-    fun usable(network: Network): Boolean {
-        val caps = cm.getNetworkCapabilities(network) ?: return false
-        return !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) &&
-            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-    }
-    fun score(network: Network): Int {
-        val caps = cm.getNetworkCapabilities(network) ?: return 0
-        var s = 1
-        if (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) s += 4
-        if (caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) s += 3
-        if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED)) s += 1
-        return s
-    }
-    return cm.activeNetwork?.takeIf(::usable)
-        ?: cm.allNetworks.filter(::usable).maxByOrNull(::score)
 }
 
 internal actual suspend fun <T> withProxyAuthentication(

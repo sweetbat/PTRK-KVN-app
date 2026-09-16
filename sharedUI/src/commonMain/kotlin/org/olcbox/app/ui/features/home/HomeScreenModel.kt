@@ -95,7 +95,9 @@ class HomeScreenViewModel(
                         VpnStatus.Connecting -> it.copy(
                             isVpnConnected = false,
                             isVpnLoading = true,
-                            connectedSinceEpochMs = null,
+                            // Keep timer if tunnel is still up from a prior session.
+                            connectedSinceEpochMs = it.connectedSinceEpochMs
+                                ?: vpnManager.connectedSinceEpochMs(),
                         )
                         VpnStatus.Reconnecting -> it.copy(
                             // Show as connecting spinner, not "Connected" + spinner.

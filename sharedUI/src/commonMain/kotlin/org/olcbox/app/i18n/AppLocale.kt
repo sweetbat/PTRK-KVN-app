@@ -119,7 +119,7 @@ object S {
     val node get() = if (ru) "\u0423\u0437\u0435\u043b" else "Node"
     val bypass get() = if (ru) "\u041e\u0431\u0445\u043e\u0434" else "Bypass"
     val regular get() = if (ru) "\u041e\u0431\u044b\u0447\u043d\u044b\u0435" else "Regular"
-    val offline get() = if (ru) "\u041e\u0444\u0444\u043b\u0430\u0439\u043d" else "Offline"
+    val offline get() = "n/a"
     val ping get() = if (ru) "\u041f\u0438\u043d\u0433" else "Ping"
     val update get() = if (ru) "\u041e\u0431\u043d\u043e\u0432\u0438\u0442\u044c" else "Update"
     val remaining get() = if (ru) "\u043e\u0441\u0442\u0430\u043b\u043e\u0441\u044c" else "remaining"

@@ -52,6 +52,10 @@ object MihomoEngine {
         "DOMAIN-SUFFIX,speedtest.net,GLOBAL",
         "DOMAIN-SUFFIX,ookla.com,GLOBAL",
         "DOMAIN-SUFFIX,speedtestcustom.com,GLOBAL",
+        "DOMAIN-SUFFIX,ptrkkvn.beer,GLOBAL",
+        "DOMAIN-SUFFIX,github.com,GLOBAL",
+        "DOMAIN-SUFFIX,githubusercontent.com,GLOBAL",
+        "DOMAIN-SUFFIX,api.github.com,GLOBAL",
     )
 
     /**
@@ -160,14 +164,6 @@ object MihomoEngine {
             // Carrier NAT drops idle TCP; keep-alive stops Telegram / long sessions dying.
             .put("keep-alive-interval", 30)
             .put("hosts", ntcPartyHosts())
-            // RoscomVPN geosite/geoip (HAPP DEFAULT) — category-ru / telegram / ads tags.
-            .put("geo-auto-update", true)
-            .put(
-                "geox-url",
-                JSONObject()
-                    .put("geoip", org.olcbox.app.vpn.RoscomVpnRouting.GEOIP_URL)
-                    .put("geosite", org.olcbox.app.vpn.RoscomVpnRouting.GEOSITE_URL),
-            )
             // Keep a local mixed-port so we can diagnose; VpnService path does not need it.
             .put("mixed-port", 7890)
             .put(
@@ -178,22 +174,23 @@ object MihomoEngine {
                     .put("stack", "system")
                     .put("auto-route", false)
                     .put("auto-detect-interface", false)
-                    .put("mtu", 1280)
+                    .put("mtu", 1500)
                     .put(
                         "dns-hijack",
                         org.json.JSONArray().put("any:53"),
                     ),
             )
             .put("find-process-mode", "off")
-            // Sniff for domain rules, but do NOT rewrite destinations — override breaks
-            // XHTTP / HTTP2 and stalls long-lived apps (Telegram) after hours.
+            // Required with hev/SOCKS: recover Host/SNI so domain rules match.
+            // override-destination stays on for ntc.party / whitelist domain matching;
+            // QUIC sniff disabled (was rewriting XHTTP / long-lived HTTP2 badly).
             .put(
                 "sniffer",
                 JSONObject()
                     .put("enable", true)
                     .put("force-dns-mapping", true)
                     .put("parse-pure-ip", true)
-                    .put("override-destination", false)
+                    .put("override-destination", true)
                     .put(
                         "force-domain",
                         org.json.JSONArray()
@@ -210,7 +207,7 @@ object MihomoEngine {
                                         "ports",
                                         org.json.JSONArray().put("80").put("8080-8880"),
                                     )
-                                    .put("override-destination", false),
+                                    .put("override-destination", true),
                             )
                             .put(
                                 "TLS",
@@ -219,7 +216,7 @@ object MihomoEngine {
                                         "ports",
                                         org.json.JSONArray().put("443").put("8443"),
                                     )
-                                    .put("override-destination", false),
+                                    .put("override-destination", true),
                             ),
                     ),
             )
@@ -517,10 +514,16 @@ hosts:
         initialized = true
     }
 
+    fun ensureBundledGeoFiles(context: Context) {
+        val dir = File(context.filesDir, "mihomo").apply { mkdirs() }
+        ensureGeoFiles(context, dir)
+    }
+
     private fun ensureGeoFiles(context: Context, home: File) {
         listOf("geoip.metadb", "GeoSite.dat").forEach { name ->
             val out = File(home, name)
-            if (out.exists() && out.length() > 1024) return@forEach
+            val needsCopy = !out.exists() || out.length() < 1024
+            if (!needsCopy) return@forEach
             runCatching {
                 context.assets.open("mihomo/$name").use { input ->
                     out.outputStream().use { output -> input.copyTo(output) }

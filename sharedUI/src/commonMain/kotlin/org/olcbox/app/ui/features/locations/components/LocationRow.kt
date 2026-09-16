@@ -41,6 +41,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -49,6 +50,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.TextUnit
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.parseTrafficQuota
 import org.olcbox.app.i18n.AppLocale
@@ -68,8 +70,8 @@ fun LocationRow(
     pingMs: Int?,
     isError: Boolean = false,
     settingsEnabled: Boolean = true,
-    nameFontSize: androidx.compose.ui.unit.TextUnit = 16.sp,
-    tagFontSize: androidx.compose.ui.unit.TextUnit = 9.sp,
+    nameFontSize: TextUnit = 16.sp,
+    tagFontSize: TextUnit = 9.sp,
     onSettingsClick: () -> Unit = {},
     onClick: () -> Unit
 ) {
@@ -133,7 +135,11 @@ fun LocationRow(
             Spacer(modifier = Modifier.width(10.dp))
         }
 
-        Column(modifier = Modifier.weight(1f)) {
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .clipToBounds()
+        ) {
             Text(
                 text = cleanName,
                 color = textColor,
@@ -141,7 +147,8 @@ fun LocationRow(
                 fontWeight = FontWeight.Medium,
                 maxLines = 1,
                 softWrap = false,
-                overflow = TextOverflow.Clip
+                overflow = TextOverflow.Clip,
+                modifier = Modifier.fillMaxWidth(),
             )
 
             val protocolTags = metadata?.protocolTags().orEmpty()
@@ -176,8 +183,10 @@ fun LocationRow(
             )
         }
 
+        Spacer(modifier = Modifier.width(8.dp))
+
         Box(
-            modifier = Modifier.widthIn(min = 52.dp),
+            modifier = Modifier.width(48.dp),
             contentAlignment = Alignment.CenterEnd,
         ) {
             when {
@@ -188,20 +197,22 @@ fun LocationRow(
                 pingMs != null -> {
                     Text(
                         text = "$pingMs ${org.olcbox.app.i18n.S.localizeDataUnit("ms")}",
-                        fontSize = 13.sp,
+                        fontSize = 12.sp,
                         fontWeight = FontWeight.Medium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
+                        softWrap = false,
                     )
                 }
 
                 isError -> {
                     Text(
                         text = S.offline,
-                        fontSize = 13.sp,
+                        fontSize = 12.sp,
                         fontWeight = FontWeight.Medium,
                         color = MaterialTheme.colorScheme.error,
                         maxLines = 1,
+                        softWrap = false,
                     )
                 }
             }
@@ -254,12 +265,14 @@ private fun locationSubtitle(location: LocationItem): String {
 @Composable
 private fun ProtocolTagRow(
     tags: List<String>,
-    fontSize: androidx.compose.ui.unit.TextUnit = 9.sp,
+    fontSize: TextUnit = 9.sp,
 ) {
     Row(
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clipToBounds(),
     ) {
         tags.take(6).forEach { tag ->
             val colors = protocolTagColors(tag)
@@ -270,6 +283,7 @@ private fun ProtocolTagRow(
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
                 softWrap = false,
+                overflow = TextOverflow.Clip,
                 modifier = Modifier
                     .clip(RoundedCornerShape(4.dp))
                     .background(colors.second)

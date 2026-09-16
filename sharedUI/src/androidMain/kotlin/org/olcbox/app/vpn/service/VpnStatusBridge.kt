@@ -58,6 +58,11 @@ object VpnStatusBridge {
         applyLocal(VpnStatus.Disconnected, null, fromService = false)
     }
 
+    /** UI process restart while `:vpn` stayed Connected. */
+    fun restoreConnectedFromService() {
+        applyLocal(VpnStatus.Connected, null, fromService = true)
+    }
+
     fun publish(context: Context, status: VpnStatus, log: String? = null) {
         val kind = when (status) {
             VpnStatus.Disconnected -> KIND_DISCONNECTED

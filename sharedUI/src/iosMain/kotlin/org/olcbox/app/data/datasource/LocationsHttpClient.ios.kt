@@ -65,8 +65,10 @@ internal actual suspend fun downloadSubscriptionBodyDirect(
     connectTimeoutMs: Long,
     requestTimeoutMs: Long,
     socketTimeoutMs: Long,
+    subscriptionProxy: SubscriptionFetchProxy?,
 ): DirectSubscriptionDownload {
     val client = createProxyHttpClient(
+        subscriptionProxy = subscriptionProxy,
         connectTimeoutMs = connectTimeoutMs,
         requestTimeoutMs = requestTimeoutMs,
         socketTimeoutMs = socketTimeoutMs,

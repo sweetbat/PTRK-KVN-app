@@ -25,6 +25,10 @@ object OlcRtcRoutingConfig {
         "DOMAIN-SUFFIX,speedtest.net,PROXY",
         "DOMAIN-SUFFIX,ookla.com,PROXY",
         "DOMAIN-SUFFIX,speedtestcustom.com,PROXY",
+        "DOMAIN-SUFFIX,ptrkkvn.beer,PROXY",
+        "DOMAIN-SUFFIX,github.com,PROXY",
+        "DOMAIN-SUFFIX,githubusercontent.com,PROXY",
+        "DOMAIN-SUFFIX,api.github.com,PROXY",
         // hev mapdns 100.64/10 must not hit GEOIP,private → DIRECT.
         "IP-CIDR,100.64.0.0/10,PROXY,no-resolve",
         // ntc.party AAAA-only: force via tunnel (any routing mode).
@@ -76,10 +80,6 @@ object OlcRtcRoutingConfig {
             appendLine("unified-delay: true")
             appendLine("tcp-concurrent: true")
             appendLine("keep-alive-interval: 30")
-            appendLine("geo-auto-update: true")
-            appendLine("geox-url:")
-            appendLine("  geoip: \"${RoscomVpnRouting.GEOIP_URL}\"")
-            appendLine("  geosite: \"${RoscomVpnRouting.GEOSITE_URL}\"")
             appendLine()
             appendLine("hosts:")
             appendLine("  ntc.party: 130.255.77.28")
@@ -97,7 +97,7 @@ object OlcRtcRoutingConfig {
             appendLine("  enable: true")
             appendLine("  force-dns-mapping: true")
             appendLine("  parse-pure-ip: true")
-            appendLine("  override-destination: false")
+            appendLine("  override-destination: true")
             appendLine("  force-domain:")
             appendLine("    - ntc.party")
             appendLine("    - +.ntc.party")

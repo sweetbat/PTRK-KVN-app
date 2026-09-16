@@ -45,6 +45,7 @@ class AppActivity : ComponentActivity() {
         consumeDeepLink(intent)
 
         val vpnManager = AndroidVpnManager(this)
+        vpnManager.restoreVpnStatusIfRunning()
         val locationsDataSource = LocationsDataSourceImpl(this)
         val locationsRepository = LocationsRepositoryImpl(locationsDataSource)
         val configImporter = AndroidConfigImporter(this)

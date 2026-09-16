@@ -557,16 +557,53 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
     }
 
     override fun subscriptionFetchProxy(): SubscriptionFetchProxy? {
-        // Prefer direct OkHttp bound to the upstream network (see LocationsHttpClient).
-        // SOCKS-through-tunnel broke drink/olcsub refresh on whitelist + olcRTC
-        // ("subscription up to date" while the download actually failed).
-        return null
+        val currentStatus = status.value
+        if (currentStatus !is VpnStatus.Connected &&
+            currentStatus !is VpnStatus.Reconnecting
+        ) {
+            return null
+        }
+
+        // UI process must fetch through the local engine SOCKS (through VPN),
+        // not around the TUN — whitelist + olcRTC need that path.
+        return when (readActiveEngine()) {
+            "mihomo" -> SubscriptionFetchProxy(
+                host = "127.0.0.1",
+                port = 7890,
+            )
+            else -> {
+                val proxy = _proxySettings.value
+                SubscriptionFetchProxy(
+                    host = AndroidSocksProxySettings.connectHost(proxy.host),
+                    port = proxy.port,
+                    username = proxy.username,
+                    password = proxy.password,
+                )
+            }
+        }
     }
 
     override fun connectedSinceEpochMs(): Long? {
         val status = status.value
-        if (status !is VpnStatus.Connected && status !is VpnStatus.Reconnecting) return null
+        if (status !is VpnStatus.Connected && status !is VpnStatus.Reconnecting) {
+            // UI process may have restarted while :vpn stayed Connected.
+            if (VpnConnectedSinceStore.read(appContext) != null &&
+                VpnServiceStatusStore.isLikelyConnected(appContext)
+            ) {
+                return VpnConnectedSinceStore.read(appContext)
+            }
+            return null
+        }
         return VpnConnectedSinceStore.read(appContext)
+    }
+
+    /** Re-sync Connected after UI process death while the tunnel stayed up. */
+    fun restoreVpnStatusIfRunning() {
+        org.olcbox.app.vpn.service.VpnStatusBridge.ensureRegistered(appContext)
+        if (status.value is VpnStatus.Connected || status.value is VpnStatus.Reconnecting) return
+        if (VpnServiceStatusStore.isLikelyConnected(appContext)) {
+            org.olcbox.app.vpn.service.VpnStatusBridge.restoreConnectedFromService()
+        }
     }
 
     private suspend fun ensureProxySettings() {

@@ -80,6 +80,7 @@ internal expect suspend fun downloadSubscriptionBodyDirect(
     connectTimeoutMs: Long = 8_000,
     requestTimeoutMs: Long = 20_000,
     socketTimeoutMs: Long = 20_000,
+    subscriptionProxy: SubscriptionFetchProxy? = null,
 ): DirectSubscriptionDownload
 
 internal expect suspend fun <T> withProxyAuthentication(
@@ -808,34 +809,38 @@ class LocationsRepositoryImpl(
 
         return try {
             withProxyAuthentication(subscriptionProxy) {
-                // Prefer the platform direct downloader (Android: raw OkHttp with pinned UA).
-                // Ktor alone was sending ktor-client / okhttp UA → JSON or base64, not Clash YAML.
-                val content = if (subscriptionProxy == null) {
-                    try {
-                        downloadSubscriptionBodyDirect(
-                            url = url,
-                            hwid = hwid,
-                            allowInsecureRequests = allowInsecureRequests,
-                        )
-                    } catch (error: Throwable) {
-                        if (error is CancellationException) throw error
-                        return@withProxyAuthentication error.toDownloadFailure()
-                    }
-                } else {
-                    downloadTextFromUrlViaKtor(
+                // Always prefer OkHttp + PTRK UA (and SOCKS when VPN is up).
+                val content = try {
+                    downloadSubscriptionBodyDirect(
                         url = url,
                         hwid = hwid,
-                        subscriptionProxy = subscriptionProxy,
                         allowInsecureRequests = allowInsecureRequests,
-                    ).getOrElse { error ->
-                        return@withProxyAuthentication when (error) {
-                            is IllegalStateException -> DownloadSubscriptionResult.Failure(
-                                LocationImportFailureKind.Http,
-                                error.message ?: "Subscription HTTP error"
-                            )
-                            else -> error.toDownloadFailure()
-                        }
-                    }.let { DirectSubscriptionDownload(content = it) }
+                        connectTimeoutMs = if (subscriptionProxy != null) 6_000 else 8_000,
+                        requestTimeoutMs = if (subscriptionProxy != null) 25_000 else 20_000,
+                        socketTimeoutMs = if (subscriptionProxy != null) 25_000 else 20_000,
+                        subscriptionProxy = subscriptionProxy,
+                    )
+                } catch (error: Throwable) {
+                    if (error is CancellationException) throw error
+                    if (subscriptionProxy != null) {
+                        // Fallback: Ktor via same SOCKS if OkHttp path fails.
+                        downloadTextFromUrlViaKtor(
+                            url = url,
+                            hwid = hwid,
+                            subscriptionProxy = subscriptionProxy,
+                            allowInsecureRequests = allowInsecureRequests,
+                        ).getOrElse { fallbackError ->
+                            return@withProxyAuthentication when (fallbackError) {
+                                is IllegalStateException -> DownloadSubscriptionResult.Failure(
+                                    LocationImportFailureKind.Http,
+                                    fallbackError.message ?: "Subscription HTTP error"
+                                )
+                                else -> fallbackError.toDownloadFailure()
+                            }
+                        }.let { DirectSubscriptionDownload(content = it) }
+                    } else {
+                        return@withProxyAuthentication error.toDownloadFailure()
+                    }
                 }
 
                 if (content.content.isBlank()) {

@@ -17,6 +17,13 @@ class App : Application() {
         super.onCreate()
         appContext = applicationContext
         org.olcbox.app.data.mihomo.MihomoAndroidContext.app = applicationContext
+        org.olcbox.app.vpn.service.VpnStatusBridge.ensureRegistered(applicationContext)
+        runCatching {
+            org.olcbox.app.vpn.PtrkStorageCleanup.runOnAppStart(
+                applicationContext,
+                org.olcbox.app.CurrentAppInfo.value.version,
+            )
+        }
         // Restore locale before any Activity/Compose first frame — otherwise START /
         // Disconnected flash in English until the first recomposition.
         runBlocking {
