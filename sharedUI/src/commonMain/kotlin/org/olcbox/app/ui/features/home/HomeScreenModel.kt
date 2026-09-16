@@ -101,6 +101,9 @@ class HomeScreenViewModel(
                         )
                         VpnStatus.Reconnecting -> it.copy(
                             // Show as connecting spinner, not "Connected" + spinner.
+                            // Do not clear timer here — network migration reconnects also
+                            // use Reconnecting; server-switch reset is in restartVpnIfRunning
+                            // + VpnConnectedSinceStore.clear(isRestart).
                             isVpnConnected = false,
                             isVpnLoading = true,
                         )
@@ -256,7 +259,8 @@ class HomeScreenViewModel(
             VpnStatus.Connected,
             VpnStatus.Connecting,
             VpnStatus.Reconnecting -> viewModelScope.launch {
-                _state.update { it.copy(isVpnLoading = true) }
+                // Switching servers must zero the uptime counter immediately.
+                _state.update { it.copy(isVpnLoading = true, connectedSinceEpochMs = null) }
                 val active = locationsRepository.getActiveLocation()
                 if (active == null || !active.location.isComplete()) {
                     vpnManager.stopVpn()

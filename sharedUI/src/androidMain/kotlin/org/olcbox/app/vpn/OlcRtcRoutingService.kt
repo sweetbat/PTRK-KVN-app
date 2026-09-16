@@ -61,6 +61,8 @@ class OlcRtcRoutingService : Service() {
         val socksPort = intent?.getIntExtra(EXTRA_SOCKS_PORT, 10808) ?: 10808
         val profilePath = intent?.getStringExtra(EXTRA_PROFILE_PATH)
         val networkHandle = intent?.getLongExtra(EXTRA_NETWORK_HANDLE, 0L) ?: 0L
+        val socksUsername = intent?.getStringExtra(EXTRA_SOCKS_USERNAME).orEmpty()
+        val socksPassword = intent?.getStringExtra(EXTRA_SOCKS_PASSWORD).orEmpty()
 
         scope.launch {
             val ok = runCatching {
@@ -74,7 +76,13 @@ class OlcRtcRoutingService : Service() {
                     null
                 } ?: run {
                     val sourceText = OlcRtcRoutingConfig.findSourceProfile(app)?.readText()
-                    OlcRtcRoutingConfig.build(app, socksPort, sourceText)
+                    OlcRtcRoutingConfig.build(
+                        context = app,
+                        olcRtcSocksPort = socksPort,
+                        sourceYaml = sourceText,
+                        socksUsername = socksUsername,
+                        socksPassword = socksPassword,
+                    )
                 }
                 Log.i(
                     TAG,
@@ -174,6 +182,8 @@ class OlcRtcRoutingService : Service() {
         const val EXTRA_SOCKS_PORT = "socks_port"
         const val EXTRA_PROFILE_PATH = "profile_path"
         const val EXTRA_NETWORK_HANDLE = "network_handle"
+        const val EXTRA_SOCKS_USERNAME = "socks_username"
+        const val EXTRA_SOCKS_PASSWORD = "socks_password"
         const val EXTRA_OK = "ok"
         const val EXTRA_MIXED_PORT = "mixed_port"
         const val EXTRA_ERROR = "error"
@@ -186,6 +196,8 @@ class OlcRtcRoutingService : Service() {
             profilePath: String?,
             networkHandle: Long,
             onResult: (Boolean) -> Unit,
+            socksUsername: String = "",
+            socksPassword: String = "",
         ) {
             val receiver = object : ResultReceiver(Handler(Looper.getMainLooper())) {
                 override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
@@ -197,6 +209,8 @@ class OlcRtcRoutingService : Service() {
                 putExtra(EXTRA_RECEIVER, receiver)
                 putExtra(EXTRA_SOCKS_PORT, olcRtcSocksPort)
                 putExtra(EXTRA_NETWORK_HANDLE, networkHandle)
+                putExtra(EXTRA_SOCKS_USERNAME, socksUsername)
+                putExtra(EXTRA_SOCKS_PASSWORD, socksPassword)
                 if (!profilePath.isNullOrBlank()) putExtra(EXTRA_PROFILE_PATH, profilePath)
             }
             context.startService(intent)

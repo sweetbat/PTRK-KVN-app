@@ -14,9 +14,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -25,7 +24,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -38,19 +36,23 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.unit.TextUnit
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.parseTrafficQuota
 import org.olcbox.app.i18n.AppLocale
@@ -59,7 +61,6 @@ import org.olcbox.app.ui.components.TrafficQuotaIndicator
 import org.olcbox.app.ui.features.locations.LocationItem
 import org.olcbox.app.util.normalizeFlagToken
 import org.olcbox.app.util.parseEmojiAndName
-import androidx.compose.foundation.background
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -136,25 +137,21 @@ fun LocationRow(
         }
 
         Column(
-            modifier = Modifier
-                .weight(1f)
-                .clipToBounds()
+            modifier = Modifier.weight(1f)
         ) {
-            Text(
+            AutoShrinkText(
                 text = cleanName,
                 color = textColor,
-                fontSize = nameFontSize,
+                maxFontSize = nameFontSize,
+                minFontSize = 9.sp,
                 fontWeight = FontWeight.Medium,
-                maxLines = 1,
-                softWrap = false,
-                overflow = TextOverflow.Clip,
                 modifier = Modifier.fillMaxWidth(),
             )
 
             val protocolTags = metadata?.protocolTags().orEmpty()
             if (protocolTags.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(4.dp))
-                ProtocolTagRow(tags = protocolTags, fontSize = tagFontSize)
+                ProtocolTagRow(tags = protocolTags, maxFontSize = tagFontSize)
             } else if (!description.isNullOrBlank()) {
                 Text(
                     text = description,
@@ -263,53 +260,148 @@ private fun locationSubtitle(location: LocationItem): String {
 }
 
 @Composable
+private fun AutoShrinkText(
+    text: String,
+    color: Color,
+    maxFontSize: TextUnit,
+    minFontSize: TextUnit,
+    fontWeight: FontWeight,
+    modifier: Modifier = Modifier,
+) {
+    BoxWithConstraints(modifier = modifier) {
+        val density = LocalDensity.current
+        val measurer = rememberTextMeasurer()
+        val maxWidthPx = with(density) { maxWidth.toPx() }
+        val fitted = remember(text, maxWidthPx, maxFontSize, minFontSize, fontWeight) {
+            var lo = minFontSize.value
+            var hi = maxFontSize.value
+            var best = minFontSize
+            repeat(14) {
+                val mid = (lo + hi) / 2f
+                val result = measurer.measure(
+                    text = AnnotatedString(text),
+                    style = TextStyle(fontSize = mid.sp, fontWeight = fontWeight),
+                    maxLines = 1,
+                    softWrap = false,
+                )
+                if (result.size.width <= maxWidthPx) {
+                    best = mid.sp
+                    lo = mid
+                } else {
+                    hi = mid
+                }
+            }
+            best
+        }
+        Text(
+            text = text,
+            color = color,
+            fontSize = fitted,
+            fontWeight = fontWeight,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Clip,
+        )
+    }
+}
+
+@Composable
 private fun ProtocolTagRow(
     tags: List<String>,
-    fontSize: TextUnit = 9.sp,
+    maxFontSize: TextUnit = 9.sp,
 ) {
-    Row(
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier
-            .fillMaxWidth()
-            .clipToBounds(),
-    ) {
-        tags.take(6).forEach { tag ->
-            val colors = protocolTagColors(tag)
-            Text(
-                text = tag,
-                color = colors.first,
-                fontSize = fontSize,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                softWrap = false,
-                overflow = TextOverflow.Clip,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(colors.second)
-                    .padding(horizontal = 5.dp, vertical = 2.dp),
-            )
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        val density = LocalDensity.current
+        val measurer = rememberTextMeasurer()
+        val maxWidthPx = with(density) { maxWidth.toPx() }
+        val displayTags = tags.take(6)
+        val fitted = remember(displayTags, maxWidthPx, maxFontSize) {
+            val minSp = 6f
+            var lo = minSp
+            var hi = maxFontSize.value
+            var best = minSp.sp
+            fun fits(sizeSp: Float): Boolean {
+                var total = 0f
+                val gapPx = with(density) { 4.dp.toPx() }
+                val hPadPx = with(density) { 10.dp.toPx() } // 5dp * 2
+                displayTags.forEachIndexed { index, tag ->
+                    val result = measurer.measure(
+                        text = AnnotatedString(tag),
+                        style = TextStyle(fontSize = sizeSp.sp, fontWeight = FontWeight.SemiBold),
+                        maxLines = 1,
+                        softWrap = false,
+                    )
+                    total += result.size.width + hPadPx
+                    if (index > 0) total += gapPx
+                }
+                return total <= maxWidthPx
+            }
+            repeat(14) {
+                val mid = (lo + hi) / 2f
+                if (fits(mid)) {
+                    best = mid.sp
+                    lo = mid
+                } else {
+                    hi = mid
+                }
+            }
+            best
+        }
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            displayTags.forEach { tag ->
+                val colors = protocolTagColors(tag)
+                Text(
+                    text = tag,
+                    color = colors.first,
+                    fontSize = fitted,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Clip,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(colors.second)
+                        .padding(horizontal = 5.dp, vertical = 2.dp),
+                )
+            }
         }
     }
 }
 
+/**
+ * Soft unique pastels: protocol / transport / security / JSON — no shared hues.
+ * Pair = (text, background).
+ */
 private fun protocolTagColors(tag: String): Pair<Color, Color> {
     val key = tag.trim().uppercase()
-    val bg = when (key) {
-        "VLESS" -> Color(0xFF1E5AA8)
-        "VMESS" -> Color(0xFF2563EB)
-        "HYSTERIA2", "HYSTERIA", "HY2" -> Color(0xFF0F766E)
-        "JSON", "XHTTP" -> Color(0xFFB45309)
-        "TROJAN" -> Color(0xFF6D28D9)
-        "SS", "SHADOWSOCKS" -> Color(0xFFC2410C)
-        "TUIC" -> Color(0xFF047857)
-        "GRPC" -> Color(0xFF334155)
-        "WS", "HTTP", "TCP", "UDP", "H2", "HTTPUPGRADE" -> Color(0xFF475569)
-        "REALITY" -> Color(0xFF1D4ED8)
-        "TLS", "VISION" -> Color(0xFF0F766E)
-        else -> Color(0xFF64748B)
+    return when (key) {
+        // Protocols
+        "VLESS" -> Color(0xFF5A6FA8) to Color(0xFFE8ECF8)          // periwinkle
+        "VMESS" -> Color(0xFF6B7DB5) to Color(0xFFEEF0FA)
+        "TROJAN" -> Color(0xFF8B6FA8) to Color(0xFFF3EAF8)         // lilac
+        "SS", "SHADOWSOCKS" -> Color(0xFFB07A5A) to Color(0xFFF8EDE4) // peach
+        "HYSTERIA2", "HYSTERIA", "HY2" -> Color(0xFF4A9A8A) to Color(0xFFE4F5F1) // mint
+        "TUIC" -> Color(0xFF5A9A6E) to Color(0xFFE6F5EB)
+        // Transports — each distinct from protocols
+        "TCP" -> Color(0xFF7A8494) to Color(0xFFEEF1F4)            // cool gray
+        "XHTTP" -> Color(0xFFA89050) to Color(0xFFF7F1DE)          // butter
+        "WS", "WEBSOCKET" -> Color(0xFF4A9AB8) to Color(0xFFE3F3F8) // sky
+        "GRPC" -> Color(0xFF7A9A5A) to Color(0xFFEEF5E4)           // sage
+        "H2", "HTTP", "HTTPUPGRADE" -> Color(0xFF6A8A9A) to Color(0xFFE8F0F4)
+        "UDP" -> Color(0xFF8A7A6A) to Color(0xFFF4EEE8)
+        // Security
+        "NONE" -> Color(0xFFB07088) to Color(0xFFF8E8EE)           // rose
+        "REALITY" -> Color(0xFF6A70B0) to Color(0xFFEAEBFA)        // soft indigo
+        "TLS" -> Color(0xFF4A9A78) to Color(0xFFE4F6EE)            // seafoam
+        "VISION" -> Color(0xFF5A8A9A) to Color(0xFFE6F2F6)
+        // Format
+        "JSON" -> Color(0xFFB87868) to Color(0xFFF8EBE6)           // coral
+        else -> Color(0xFF7A8490) to Color(0xFFEFF1F3)
     }
-    return Color.White to bg
 }
 
 private fun quotaText(used: String?, available: String?): String? {

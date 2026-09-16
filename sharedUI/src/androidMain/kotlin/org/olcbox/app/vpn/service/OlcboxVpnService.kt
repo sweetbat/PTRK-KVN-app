@@ -33,6 +33,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.suspendCancellableCoroutine
 import mobile.Mobile
 import mobile.Runtime as OlcRtcRuntime
 import mobile.SocketProtector
@@ -50,11 +51,13 @@ import org.olcbox.app.vpn.AndroidConnectionMode
 import org.olcbox.app.vpn.AndroidSocksProxySettings
 import org.olcbox.app.vpn.RuSafeDns
 import org.olcbox.app.vpn.AndroidSplitTunnelMode
+import org.olcbox.app.vpn.OlcRtcRoutingConfig
 import org.olcbox.app.vpn.OlcRtcRoutingService
 import org.olcbox.app.vpn.UpstreamCandidate
 import org.olcbox.app.vpn.UpstreamNetworkSelector
 import org.olcbox.app.vpn.UpstreamTransport
 import org.olcbox.app.vpn.VpnStatus
+import kotlin.coroutines.resume
 import org.olcbox.app.vpn.data.KEY_ANDROID_CONNECTION_MODE
 import org.olcbox.app.vpn.data.KEY_ANDROID_SPLIT_TUNNEL_BYPASS_APPS
 import org.olcbox.app.vpn.data.KEY_ANDROID_SPLIT_TUNNEL_MODE
@@ -310,6 +313,8 @@ class OlcboxVpnService : VpnService() {
         val isRestart = shouldRestartForStartCommand()
         if (isRestart) {
             addLog("Restarting ${activeModeLabel()} for selected location")
+            // Server switch / reconnect: reset uptime so the UI counter starts fresh.
+            org.olcbox.app.vpn.VpnConnectedSinceStore.clear(applicationContext)
         }
         // Show Connecting immediately — if this never appears, START never reached the service.
         setStatus(if (isRestart) VpnStatus.Reconnecting else VpnStatus.Connecting)
@@ -822,6 +827,9 @@ class OlcboxVpnService : VpnService() {
 //                stopTransportProcesses(closeTun = true)
 //                return
 //            }
+            if (!startOlcRtcFetchRouter(upstream)) {
+                addLog("olcRTC Clash fetch router failed — subscription refresh may stall")
+            }
             setStatus(VpnStatus.Connected)
             resetRecoveryState()
             updateNotification(connectedNotificationText())
@@ -833,8 +841,8 @@ class OlcboxVpnService : VpnService() {
         delay(TUNNEL_HANDOFF_DELAY_MS)
         coroutineContext.ensureActive()
 
-        // olcRTC routing is server-side (olcwave). App "Маршрутизация" is Mihomo-only.
-        stopOlcRtcRoutingRouter()
+        // TUN still goes straight to Mobile SOCKS (server-side whitelist).
+        // Clash on :7890 is only for UI subscription/update fetch (no SOCKS auth).
         val pfd = establishSystemVpnTunnel()
         if (pfd == null) {
             stopMobileAndWait()
@@ -850,11 +858,55 @@ class OlcboxVpnService : VpnService() {
         coroutineContext.ensureActive()
         if (requestedGeneration != generation) return
 
+        if (!startOlcRtcFetchRouter(upstream)) {
+            addLog("olcRTC Clash fetch router failed — subscription refresh may stall")
+        }
+
         setStatus(VpnStatus.Connected)
         resetRecoveryState()
         updateNotification(connectedNotificationText())
-        addLog("VPN tunnel established (olcRTC; app routing N/A)")
+        addLog("VPN tunnel established (olcRTC; fetch via :${OlcRtcRoutingConfig.MIXED_PORT})")
         startWatchdog()
+    }
+
+    /**
+     * Starts Clash in `:route` with a SOCKS5 outbound to local Mobile (auth),
+     * exposing unauthenticated mixed-port 7890 for OkHttp subscription/update fetches.
+     */
+    private suspend fun startOlcRtcFetchRouter(upstream: Network): Boolean {
+        stopOlcRtcRoutingRouter()
+        val yaml = runCatching {
+            OlcRtcRoutingConfig.build(
+                context = applicationContext,
+                olcRtcSocksPort = socksListenPort,
+                sourceYaml = OlcRtcRoutingConfig.findSourceProfile(applicationContext)?.readText(),
+                socksUsername = socksUsername,
+                socksPassword = socksPassword,
+            )
+        }.onFailure {
+            addLog("olcRTC fetch yaml build failed: ${it.message}")
+        }.getOrNull() ?: return false
+
+        val ok = withTimeoutOrNull(20_000L) {
+            suspendCancellableCoroutine { cont ->
+                OlcRtcRoutingService.start(
+                    context = applicationContext,
+                    olcRtcSocksPort = socksListenPort,
+                    profilePath = yaml.absolutePath,
+                    networkHandle = upstream.networkHandle,
+                    socksUsername = socksUsername,
+                    socksPassword = socksPassword,
+                    onResult = { result ->
+                        if (cont.isActive) cont.resume(result)
+                    },
+                )
+            }
+        } ?: false
+        olcRtcRoutingActive = ok
+        if (ok) {
+            addLog("olcRTC fetch router ready on :${OlcRtcRoutingConfig.MIXED_PORT}")
+        }
+        return ok
     }
 
     private fun stopOlcRtcRoutingRouter() {

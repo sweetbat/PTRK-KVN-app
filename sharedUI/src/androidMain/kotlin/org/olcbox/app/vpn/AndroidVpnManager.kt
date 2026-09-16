@@ -564,23 +564,12 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
             return null
         }
 
-        // UI process must fetch through the local engine SOCKS (through VPN),
-        // not around the TUN — whitelist + olcRTC need that path.
-        return when (readActiveEngine()) {
-            "mihomo" -> SubscriptionFetchProxy(
-                host = "127.0.0.1",
-                port = 7890,
-            )
-            else -> {
-                val proxy = _proxySettings.value
-                SubscriptionFetchProxy(
-                    host = AndroidSocksProxySettings.connectHost(proxy.host),
-                    port = proxy.port,
-                    username = proxy.username,
-                    password = proxy.password,
-                )
-            }
-        }
+        // Both engines expose unauthenticated Clash mixed-port 7890 for UI fetches.
+        // olcRTC: :route Clash → authenticated Mobile SOCKS; OkHttp cannot do SOCKS5 auth.
+        return SubscriptionFetchProxy(
+            host = "127.0.0.1",
+            port = 7890,
+        )
     }
 
     override fun connectedSinceEpochMs(): Long? {

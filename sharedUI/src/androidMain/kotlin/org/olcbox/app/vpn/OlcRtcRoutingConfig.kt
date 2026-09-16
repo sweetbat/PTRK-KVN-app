@@ -56,7 +56,13 @@ object OlcRtcRoutingConfig {
             ?.maxByOrNull { it.lastModified() }
     }
 
-    fun build(context: Context, olcRtcSocksPort: Int, sourceYaml: String?): File {
+    fun build(
+        context: Context,
+        olcRtcSocksPort: Int,
+        sourceYaml: String?,
+        socksUsername: String = "",
+        socksPassword: String = "",
+    ): File {
         val providers = sourceYaml?.let { extractTopLevelSection(it, "rule-providers") }.orEmpty()
         val rulesSection = sourceYaml?.let { extractTopLevelSection(it, "rules") }
         val rewrittenRules = if (rulesSection != null) {
@@ -69,6 +75,8 @@ object OlcRtcRoutingConfig {
             .lineSequence()
             .dropWhile { it.trim().isEmpty() || it.trimStart().startsWith("rules:") }
             .joinToString("\n")
+        val userEsc = socksUsername.replace("'", "''")
+        val passEsc = socksPassword.replace("'", "''")
 
         val yaml = buildString {
             appendLine("mixed-port: $MIXED_PORT")
@@ -107,6 +115,10 @@ object OlcRtcRoutingConfig {
             appendLine("    type: socks5")
             appendLine("    server: 127.0.0.1")
             appendLine("    port: $olcRtcSocksPort")
+            if (socksUsername.isNotBlank()) {
+                appendLine("    username: '$userEsc'")
+                appendLine("    password: '$passEsc'")
+            }
             appendLine("    udp: true")
             appendLine()
             appendLine("proxy-groups:")
