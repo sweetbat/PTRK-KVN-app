@@ -74,6 +74,12 @@ object OlcRtcRoutingConfig {
             appendLine("ipv6: false")
             appendLine("find-process-mode: off")
             appendLine("unified-delay: true")
+            appendLine("tcp-concurrent: true")
+            appendLine("keep-alive-interval: 30")
+            appendLine("geo-auto-update: true")
+            appendLine("geox-url:")
+            appendLine("  geoip: \"${RoscomVpnRouting.GEOIP_URL}\"")
+            appendLine("  geosite: \"${RoscomVpnRouting.GEOSITE_URL}\"")
             appendLine()
             appendLine("hosts:")
             appendLine("  ntc.party: 130.255.77.28")
@@ -91,7 +97,7 @@ object OlcRtcRoutingConfig {
             appendLine("  enable: true")
             appendLine("  force-dns-mapping: true")
             appendLine("  parse-pure-ip: true")
-            appendLine("  override-destination: true")
+            appendLine("  override-destination: false")
             appendLine("  force-domain:")
             appendLine("    - ntc.party")
             appendLine("    - +.ntc.party")
@@ -120,6 +126,7 @@ object OlcRtcRoutingConfig {
             }
             appendLine("rules:")
             appendLine(youtube)
+            RoscomVpnRouting.forceRulesForGroup("PROXY").forEach { appendLine("  - $it") }
             appendLine(rulesBody.trimEnd())
             appendLine()
         }

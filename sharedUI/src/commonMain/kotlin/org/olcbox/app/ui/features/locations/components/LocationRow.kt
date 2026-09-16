@@ -68,6 +68,8 @@ fun LocationRow(
     pingMs: Int?,
     isError: Boolean = false,
     settingsEnabled: Boolean = true,
+    nameFontSize: androidx.compose.ui.unit.TextUnit = 16.sp,
+    tagFontSize: androidx.compose.ui.unit.TextUnit = 9.sp,
     onSettingsClick: () -> Unit = {},
     onClick: () -> Unit
 ) {
@@ -135,16 +137,17 @@ fun LocationRow(
             Text(
                 text = cleanName,
                 color = textColor,
-                fontSize = 16.sp,
+                fontSize = nameFontSize,
                 fontWeight = FontWeight.Medium,
                 maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+                softWrap = false,
+                overflow = TextOverflow.Clip
             )
 
             val protocolTags = metadata?.protocolTags().orEmpty()
             if (protocolTags.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(4.dp))
-                ProtocolTagRow(tags = protocolTags)
+                ProtocolTagRow(tags = protocolTags, fontSize = tagFontSize)
             } else if (!description.isNullOrBlank()) {
                 Text(
                     text = description,
@@ -248,12 +251,14 @@ private fun locationSubtitle(location: LocationItem): String {
     ).joinToString(" · ")
 }
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun ProtocolTagRow(tags: List<String>) {
-    FlowRow(
+private fun ProtocolTagRow(
+    tags: List<String>,
+    fontSize: androidx.compose.ui.unit.TextUnit = 9.sp,
+) {
+    Row(
         horizontalArrangement = Arrangement.spacedBy(4.dp),
-        verticalArrangement = Arrangement.spacedBy(3.dp),
+        verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier.fillMaxWidth(),
     ) {
         tags.take(6).forEach { tag ->
@@ -261,7 +266,7 @@ private fun ProtocolTagRow(tags: List<String>) {
             Text(
                 text = tag,
                 color = colors.first,
-                fontSize = 9.sp,
+                fontSize = fontSize,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
                 softWrap = false,

@@ -453,12 +453,12 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
             if (!mihomoPingFlushScheduled) {
                 mihomoPingFlushScheduled = true
                 scope.launch {
-                    // Let regular + bypass nodes all register before one cold probe.
+                    // Brief coalesce so regular+bypass register for one cold probe.
                     var last = -1
                     var stableRounds = 0
-                    val deadline = System.currentTimeMillis() + 2_000L
+                    val deadline = System.currentTimeMillis() + 450L
                     while (System.currentTimeMillis() < deadline) {
-                        delay(150)
+                        delay(40)
                         val count = mihomoPingMutex.withLock {
                             mihomoPingWaiters.values.sumOf { it.size }
                         }
@@ -557,31 +557,16 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
     }
 
     override fun subscriptionFetchProxy(): SubscriptionFetchProxy? {
-        val currentStatus = status.value
-        if (currentStatus !is VpnStatus.Connected &&
-            currentStatus !is VpnStatus.Reconnecting
-        ) {
-            return null
-        }
+        // Prefer direct OkHttp bound to the upstream network (see LocationsHttpClient).
+        // SOCKS-through-tunnel broke drink/olcsub refresh on whitelist + olcRTC
+        // ("subscription up to date" while the download actually failed).
+        return null
+    }
 
-        // UI process bypasses VpnService TUN — must hit the local engine SOCKS.
-        // Mihomo: hev dials Clash mixed-port 7890 (no auth).
-        // olcRTC: Mobile SOCKS on the configured listen port (with auth).
-        return when (readActiveEngine()) {
-            "mihomo" -> SubscriptionFetchProxy(
-                host = "127.0.0.1",
-                port = 7890,
-            )
-            else -> {
-                val proxy = _proxySettings.value
-                SubscriptionFetchProxy(
-                    host = AndroidSocksProxySettings.connectHost(proxy.host),
-                    port = proxy.port,
-                    username = proxy.username,
-                    password = proxy.password,
-                )
-            }
-        }
+    override fun connectedSinceEpochMs(): Long? {
+        val status = status.value
+        if (status !is VpnStatus.Connected && status !is VpnStatus.Reconnecting) return null
+        return VpnConnectedSinceStore.read(appContext)
     }
 
     private suspend fun ensureProxySettings() {

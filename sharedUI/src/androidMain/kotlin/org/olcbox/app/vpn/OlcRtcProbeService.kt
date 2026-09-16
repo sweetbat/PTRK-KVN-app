@@ -52,6 +52,7 @@ class OlcRtcProbeService : Service() {
 
         scope.launch {
             val delayMs = runCatching {
+                bindProbeToUpstream()
                 val port = ServerSocket(0).use { it.localPort }
                 val mobile = Mobile.new_()
                 when (action) {
@@ -69,6 +70,11 @@ class OlcRtcProbeService : Service() {
                 Log.e(TAG, "probe failed", it)
             }.getOrNull()
 
+            runCatching {
+                getSystemService(android.net.ConnectivityManager::class.java)
+                    ?.bindProcessToNetwork(null)
+            }
+
             val bundle = Bundle().apply {
                 putLong(EXTRA_RESULT_MS, delayMs ?: -1L)
             }
@@ -76,6 +82,31 @@ class OlcRtcProbeService : Service() {
             stopSelf(startId)
         }
         return START_NOT_STICKY
+    }
+
+    /**
+     * Bind `:olcrtc` probe off the VPN TUN so whitelist mode does not black-hole
+     * WebRTC signalling on some carriers (ping offline while connect still works).
+     */
+    private fun bindProbeToUpstream() {
+        val cm = getSystemService(android.net.ConnectivityManager::class.java) ?: return
+        fun usable(network: android.net.Network): Boolean {
+            val caps = cm.getNetworkCapabilities(network) ?: return false
+            return !caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN) &&
+                caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        }
+        fun score(network: android.net.Network): Int {
+            val caps = cm.getNetworkCapabilities(network) ?: return 0
+            var s = 1
+            if (caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI)) s += 4
+            if (caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR)) s += 3
+            return s
+        }
+        val network = cm.activeNetwork?.takeIf(::usable)
+            ?: cm.allNetworks.filter(::usable).maxByOrNull(::score)
+            ?: return
+        val ok = runCatching { cm.bindProcessToNetwork(network) }.getOrDefault(false)
+        Log.i(TAG, "bindProcessToNetwork($network) → $ok")
     }
 
     override fun onDestroy() {

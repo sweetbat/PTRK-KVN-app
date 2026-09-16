@@ -28,13 +28,12 @@ object MihomoEngine {
 
     private val RULES_SECTION = Regex("""(?m)^rules\s*:""")
 
-    // FlClashX default; HTTP variant is tried first in urlTestResilient (lighter for gRPC).
+    // FlClashX default; HTTP first is lighter for gRPC / cold cores.
     const val DEFAULT_TEST_URL = "https://www.gstatic.com/generate_204"
 
     private val TEST_URLS = listOf(
         "http://www.gstatic.com/generate_204",
         DEFAULT_TEST_URL,
-        "http://captive.apple.com/hotspot-detect.html",
     )
 
     /**
@@ -94,7 +93,10 @@ object MihomoEngine {
             .put("box.ntc.party", NTC_PARTY_IPV4)
 
     private fun forceRules(): List<String> =
-        MAPDNS_VIA_NODE_RULES + FORCE_VIA_GLOBAL_RULES + ntcPartyRules()
+        MAPDNS_VIA_NODE_RULES +
+            FORCE_VIA_GLOBAL_RULES +
+            ntcPartyRules() +
+            org.olcbox.app.vpn.RoscomVpnRouting.forceRulesForGroup("GLOBAL")
 
     suspend fun ensureInit(context: Context) {
         lock.withLock {
@@ -155,7 +157,17 @@ object MihomoEngine {
             .put("ipv6", false)
             .put("unified-delay", true)
             .put("tcp-concurrent", true)
+            // Carrier NAT drops idle TCP; keep-alive stops Telegram / long sessions dying.
+            .put("keep-alive-interval", 30)
             .put("hosts", ntcPartyHosts())
+            // RoscomVPN geosite/geoip (HAPP DEFAULT) — category-ru / telegram / ads tags.
+            .put("geo-auto-update", true)
+            .put(
+                "geox-url",
+                JSONObject()
+                    .put("geoip", org.olcbox.app.vpn.RoscomVpnRouting.GEOIP_URL)
+                    .put("geosite", org.olcbox.app.vpn.RoscomVpnRouting.GEOSITE_URL),
+            )
             // Keep a local mixed-port so we can diagnose; VpnService path does not need it.
             .put("mixed-port", 7890)
             .put(
@@ -166,22 +178,22 @@ object MihomoEngine {
                     .put("stack", "system")
                     .put("auto-route", false)
                     .put("auto-detect-interface", false)
-                    .put("mtu", 1500)
+                    .put("mtu", 1280)
                     .put(
                         "dns-hijack",
                         org.json.JSONArray().put("any:53"),
                     ),
             )
             .put("find-process-mode", "off")
-            // Required with hev/SOCKS: recover Host/SNI so domain rules (Минцифры /
-            // antizapret) match instead of GEOIP on the SOCKS destination IP.
+            // Sniff for domain rules, but do NOT rewrite destinations — override breaks
+            // XHTTP / HTTP2 and stalls long-lived apps (Telegram) after hours.
             .put(
                 "sniffer",
                 JSONObject()
                     .put("enable", true)
                     .put("force-dns-mapping", true)
                     .put("parse-pure-ip", true)
-                    .put("override-destination", true)
+                    .put("override-destination", false)
                     .put(
                         "force-domain",
                         org.json.JSONArray()
@@ -198,7 +210,7 @@ object MihomoEngine {
                                         "ports",
                                         org.json.JSONArray().put("80").put("8080-8880"),
                                     )
-                                    .put("override-destination", true),
+                                    .put("override-destination", false),
                             )
                             .put(
                                 "TLS",
@@ -207,16 +219,7 @@ object MihomoEngine {
                                         "ports",
                                         org.json.JSONArray().put("443").put("8443"),
                                     )
-                                    .put("override-destination", true),
-                            )
-                            .put(
-                                "QUIC",
-                                JSONObject()
-                                    .put(
-                                        "ports",
-                                        org.json.JSONArray().put("443").put("8443"),
-                                    )
-                                    .put("override-destination", true),
+                                    .put("override-destination", false),
                             ),
                     ),
             )
@@ -324,30 +327,30 @@ hosts:
     suspend fun urlTest(
         proxyName: String,
         testUrl: String = DEFAULT_TEST_URL,
-        timeoutMs: Long = 10_000L,
+        timeoutMs: Long = 4_000L,
     ): Long {
         val params = JSONObject()
             .put("proxy-name", proxyName)
             .put("test-url", testUrl)
-            .put("timeout", timeoutMs.toInt().coerceIn(3_000, 30_000))
+            .put("timeout", timeoutMs.toInt().coerceIn(1_500, 12_000))
             .toString()
-        val raw = invoke("asyncTestDelay", params, timeoutMs = timeoutMs + 4_000L)
+        val raw = invoke("asyncTestDelay", params, timeoutMs = timeoutMs + 2_000L)
         return parseDelayMs(raw)
     }
 
     /**
-     * HTTP first (gRPC-friendly), then HTTPS. Overall budget ~30s per node so
-     * several URL attempts fit without stretching a single probe forever.
+     * HTTP first (gRPC-friendly), then HTTPS. Short budget so a full subscription
+     * finishes in ~1–3s like FlClashX instead of tens of seconds.
      */
     suspend fun urlTestResilient(
         proxyName: String,
-        overallTimeoutMs: Long = 30_000L,
+        overallTimeoutMs: Long = 6_000L,
     ): Long {
         val started = System.currentTimeMillis()
         for (url in TEST_URLS) {
             val left = overallTimeoutMs - (System.currentTimeMillis() - started)
-            if (left < 2_500L) break
-            val slice = minOf(10_000L, left)
+            if (left < 1_200L) break
+            val slice = minOf(3_500L, left)
             val ms = runCatching { urlTest(proxyName, url, timeoutMs = slice) }.getOrDefault(-1L)
             if (ms > 0L) {
                 Log.i(TAG, "urlTestResilient $proxyName ok via $url → ${ms}ms")

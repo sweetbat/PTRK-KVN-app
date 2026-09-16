@@ -90,32 +90,24 @@ class MihomoProbeService : Service() {
                 // Without this, gRPC/VLESS leaves often return -1 while Hysteria still works.
                 MihomoEngine.setVpnState(enabled = false)
                 MihomoEngine.startListener()
-                kotlinx.coroutines.delay(1_200)
+                kotlinx.coroutines.delay(350)
                 val known = MihomoEngine.parseLeafProxyNames(MihomoEngine.getProxiesJson()).toSet()
                 val missing = proxies.filter { it !in known }
                 if (missing.isNotEmpty()) {
                     probeLog("missing in core (${missing.size}): ${missing.take(3).joinToString()}")
                 }
-                // Low concurrency: gRPC HTTP/2 dials fight each other in a cold core.
-                // Keep 2 in flight so UI can stream results without waiting for the whole list.
-                val gate = Semaphore(2)
+                // FlClashX-like parallelism: most leaves finish in one round.
+                val gate = Semaphore(8)
                 coroutineScope {
                     proxies.map { proxyName ->
                         async {
                             gate.withPermit {
-                                var ms = runCatching {
+                                val ms = runCatching {
                                     MihomoEngine.urlTestResilient(proxyName).takeIf { it > 0L }
                                 }.onFailure {
                                     Log.e(TAG, "mihomo probe failed for $proxyName", it)
                                     probeLog("error $proxyName: ${it.message}")
                                 }.getOrNull()
-                                if (ms == null) {
-                                    kotlinx.coroutines.delay(350)
-                                    ms = runCatching {
-                                        MihomoEngine.urlTestResilient(proxyName).takeIf { it > 0L }
-                                    }.getOrNull()
-                                    if (ms != null) probeLog("retry $proxyName -> $ms")
-                                }
                                 val delayMs = ms ?: -1L
                                 delays[proxyName] = delayMs
                                 probeLog("$proxyName -> $delayMs")
@@ -306,9 +298,9 @@ class MihomoProbeService : Service() {
                 Log.e(TAG, "failed to start mihomo probe", it)
                 return emptyMap()
             }
-            // ~30s overall budget per node, 2 in flight, plus cold setup headroom.
+            // ~6s per node with 8 in flight, plus cold setup headroom.
             val budget = timeoutMs.coerceAtLeast(
-                20_000L + ((names.size + 1) / 2) * 32_000L,
+                8_000L + ((names.size + 7) / 8) * 7_000L,
             )
             if (!latch.await(budget, TimeUnit.MILLISECONDS)) {
                 Log.w(TAG, "mihomo probe batch timed out")

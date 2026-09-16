@@ -13,6 +13,10 @@ import okhttp3.Request
 import okhttp3.Response
 import org.olcbox.app.data.identity.RemnawaveDeviceIdentity
 import org.olcbox.app.data.repository.SubscriptionFetchProxy
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import java.net.Authenticator
 import java.net.PasswordAuthentication
 import java.security.SecureRandom
@@ -318,6 +322,12 @@ private fun buildSubscriptionOkHttpClient(
         .followRedirects(true)
         .followSslRedirects(true)
 
+    // Always leave the VpnService TUN for sub downloads (whitelist / olcRTC / Mihomo).
+    findUpstreamNetwork()?.let { network ->
+        builder.socketFactory(network.socketFactory)
+        android.util.Log.i("SubDownload", "bound OkHttp to upstream $network")
+    }
+
     if (pinSubscriptionHeaders) {
         builder.addNetworkInterceptor { chain ->
             val original = chain.request()
@@ -352,6 +362,28 @@ private fun buildSubscriptionOkHttpClient(
     }
 
     return builder.build()
+}
+
+/** Wi‑Fi/cellular under the VPN — used so subscription refresh works with whitelist on. */
+private fun findUpstreamNetwork(): Network? {
+    val app = org.olcbox.app.data.mihomo.MihomoAndroidContext.app ?: return null
+    val cm = app.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        ?: return null
+    fun usable(network: Network): Boolean {
+        val caps = cm.getNetworkCapabilities(network) ?: return false
+        return !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) &&
+            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+    }
+    fun score(network: Network): Int {
+        val caps = cm.getNetworkCapabilities(network) ?: return 0
+        var s = 1
+        if (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) s += 4
+        if (caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) s += 3
+        if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED)) s += 1
+        return s
+    }
+    return cm.activeNetwork?.takeIf(::usable)
+        ?: cm.allNetworks.filter(::usable).maxByOrNull(::score)
 }
 
 internal actual suspend fun <T> withProxyAuthentication(

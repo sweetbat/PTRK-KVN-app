@@ -29,4 +29,6 @@ interface VpnManager {
     suspend fun setMihomoMode(mode: String) = Unit
     fun mihomoModeFlow(): kotlinx.coroutines.flow.Flow<String> =
         kotlinx.coroutines.flow.flowOf("rule")
+    /** Wall-clock ms when the current VPN session connected; survives UI process death. */
+    fun connectedSinceEpochMs(): Long? = null
 }

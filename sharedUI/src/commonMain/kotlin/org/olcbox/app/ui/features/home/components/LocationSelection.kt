@@ -4,10 +4,13 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -27,6 +30,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -37,11 +41,11 @@ import androidx.compose.ui.unit.sp
 import org.olcbox.app.data.model.PtrkSubscriptionCompanion
 import org.olcbox.app.data.model.SubscriptionMetadata
 import org.olcbox.app.data.model.parseTrafficQuota
+import org.olcbox.app.ui.components.TrafficQuotaIndicator
 import org.olcbox.app.ui.features.locations.LocationItem
 import org.olcbox.app.ui.features.locations.PingsState
 import org.olcbox.app.ui.features.locations.components.LocationRow
 import org.olcbox.app.ui.features.locations.components.RefreshButton
-import org.olcbox.app.ui.components.TrafficQuotaIndicator
 import androidx.compose.ui.platform.UriHandler
 
 @Composable
@@ -159,13 +163,38 @@ fun LocationSelectorScreen(
                         Column(
                             verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
+                            val nameFontSp = remember(group) {
+                                val longest = group.maxOfOrNull { loc ->
+                                    val raw = loc.metadata?.name?.takeIf { it.isNotBlank() }
+                                        ?: loc.fullName
+                                    raw.length
+                                } ?: 0
+                                when {
+                                    longest > 42 -> 12.sp
+                                    longest > 34 -> 13.sp
+                                    longest > 26 -> 14.sp
+                                    else -> 16.sp
+                                }
+                            }
+                            val tagFontSp = remember(group) {
+                                val longestTags = group.maxOfOrNull { loc ->
+                                    loc.metadata?.protocolTags().orEmpty().joinToString("").length
+                                } ?: 0
+                                when {
+                                    longestTags > 36 -> 7.sp
+                                    longestTags > 28 -> 8.sp
+                                    else -> 9.sp
+                                }
+                            }
                             group.forEach { location ->
                                 LocationSelectorRow(
                                     location = location,
                                     selectedLocationId = selectedLocationId,
                                     pingsState = pingsState,
                                     onLocationSelected = onLocationSelected,
-                                    onLocationSettingsClick = onLocationSettingsClick
+                                    onLocationSettingsClick = onLocationSettingsClick,
+                                    nameFontSize = nameFontSp,
+                                    tagFontSize = tagFontSp,
                                 )
                             }
                         }
@@ -421,13 +450,18 @@ private fun SubscriptionInfoPanel(
 
         if (!expire.isNullOrBlank() || trafficQuota != null || !unlimitedTraffic.isNullOrBlank()) {
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(IntrinsicSize.Min),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 if (!expire.isNullOrBlank()) {
                     SubscriptionInfoFrame(
                         label = org.olcbox.app.i18n.S.subscriptionExpires,
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                            .heightIn(min = 72.dp),
                     ) {
                         Text(
                             text = expire,
@@ -442,7 +476,10 @@ private fun SubscriptionInfoPanel(
                 if (trafficQuota != null || !unlimitedTraffic.isNullOrBlank()) {
                     SubscriptionInfoFrame(
                         label = org.olcbox.app.i18n.S.traffic,
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                            .heightIn(min = 72.dp),
                     ) {
                         if (trafficQuota != null) {
                             TrafficQuotaIndicator(
@@ -532,7 +569,7 @@ private fun SubscriptionInfoFrame(
     }
     if (onClick != null) {
         Surface(
-            modifier = modifier.fillMaxWidth(),
+            modifier = modifier.fillMaxWidth().fillMaxHeight(),
             shape = shape,
             color = color,
             border = border,
@@ -541,7 +578,7 @@ private fun SubscriptionInfoFrame(
         )
     } else {
         Surface(
-            modifier = modifier.fillMaxWidth(),
+            modifier = modifier.fillMaxWidth().fillMaxHeight(),
             shape = shape,
             color = color,
             border = border,
@@ -576,7 +613,9 @@ private fun LocationSelectorRow(
     selectedLocationId: String?,
     pingsState: PingsState,
     onLocationSelected: (String) -> Unit,
-    onLocationSettingsClick: (String) -> Unit
+    onLocationSettingsClick: (String) -> Unit,
+    nameFontSize: androidx.compose.ui.unit.TextUnit = 16.sp,
+    tagFontSize: androidx.compose.ui.unit.TextUnit = 9.sp,
 ) {
     val pingMs = pingsState.pingFor(location.storageId)
     val isLoading = pingsState.isChecking(location.storageId)
@@ -589,6 +628,8 @@ private fun LocationSelectorRow(
         isError = isOffline,
         pingMs = pingMs,
         settingsEnabled = location.config?.isMihomo() != true,
+        nameFontSize = nameFontSize,
+        tagFontSize = tagFontSize,
         onSettingsClick = {
             onLocationSettingsClick(location.storageId)
         },

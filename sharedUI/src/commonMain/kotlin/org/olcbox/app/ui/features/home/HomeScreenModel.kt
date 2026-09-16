@@ -89,6 +89,7 @@ class HomeScreenViewModel(
                             isVpnConnected = true,
                             isVpnLoading = false,
                             connectedSinceEpochMs = it.connectedSinceEpochMs
+                                ?: vpnManager.connectedSinceEpochMs()
                                 ?: System.currentTimeMillis(),
                         )
                         VpnStatus.Connecting -> it.copy(

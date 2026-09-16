@@ -1973,6 +1973,14 @@ class OlcboxVpnService : VpnService() {
     }
 
     private fun setStatus(status: VpnStatus) {
+        when (status) {
+            VpnStatus.Connected -> org.olcbox.app.vpn.VpnConnectedSinceStore.markConnected(applicationContext)
+            VpnStatus.Disconnected, is VpnStatus.Error ->
+                org.olcbox.app.vpn.VpnConnectedSinceStore.clear(applicationContext)
+            VpnStatus.Stopping ->
+                org.olcbox.app.vpn.VpnConnectedSinceStore.clear(applicationContext)
+            else -> Unit
+        }
         OlcboxVpnState.setStatus(status)
     }
 

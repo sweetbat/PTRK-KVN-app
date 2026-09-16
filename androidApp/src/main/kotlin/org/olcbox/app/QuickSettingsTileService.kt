@@ -12,38 +12,46 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import org.olcbox.app.vpn.AndroidConnectionMode
+import org.olcbox.app.vpn.AndroidSocksProxySettings
+import org.olcbox.app.vpn.AndroidSplitTunnelMode
 import org.olcbox.app.vpn.VpnStatus
+import org.olcbox.app.vpn.data.KEY_ANDROID_CONNECTION_MODE
+import org.olcbox.app.vpn.data.KEY_ANDROID_SPLIT_TUNNEL_BYPASS_APPS
+import org.olcbox.app.vpn.data.KEY_ANDROID_SPLIT_TUNNEL_MODE
+import org.olcbox.app.vpn.data.KEY_ANDROID_SPLIT_TUNNEL_PROXY_APPS
+import org.olcbox.app.vpn.data.KEY_ANDROID_SOCKS_HOST
+import org.olcbox.app.vpn.data.KEY_ANDROID_SOCKS_PASSWORD
+import org.olcbox.app.vpn.data.KEY_ANDROID_SOCKS_PORT
+import org.olcbox.app.vpn.data.KEY_ANDROID_SOCKS_USERNAME
+import org.olcbox.app.vpn.data.KEY_MIHOMO_MODE
+import org.olcbox.app.vpn.data.MihomoModeStore
+import org.olcbox.app.vpn.data.vpnPrefDataStore
 import org.olcbox.app.vpn.service.OlcboxVpnActions
 import org.olcbox.app.vpn.service.OlcboxVpnState
+import org.olcbox.app.vpn.service.VpnStatusBridge
 
 /**
- * Android Quick Settings tile that toggles the Olcbox VPN on/off.
- *
- * Appears in the notification shade. Tap it to start or stop the VPN.
- * If VPN permission hasn't been granted yet, opens the main app instead.
- *
- * Requires Android 7.0+ (API 24). Works correctly with minSdk = 23 because
- * the system only binds this service on devices that support Quick Settings tiles.
+ * Quick Settings tile — toggles VPN to the last selected (active) server.
  */
 @RequiresApi(Build.VERSION_CODES.N)
 class QuickSettingsTileService : TileService() {
 
     private var scope: CoroutineScope? = null
 
-    // ──────────────────────────────────────────────────────────────────────
-    // Lifecycle
-    // ──────────────────────────────────────────────────────────────────────
-
     override fun onStartListening() {
         super.onStartListening()
+        VpnStatusBridge.ensureRegistered(applicationContext)
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-
-        // Keep the tile in sync with VPN status while it is visible.
         OlcboxVpnState.status
             .onEach { status -> updateTile(status) }
             .launchIn(scope!!)
+        updateTile(OlcboxVpnState.status.value)
     }
 
     override fun onStopListening() {
@@ -52,42 +60,86 @@ class QuickSettingsTileService : TileService() {
         scope = null
     }
 
-    // ──────────────────────────────────────────────────────────────────────
-    // Click handling
-    // ──────────────────────────────────────────────────────────────────────
-
     override fun onClick() {
         super.onClick()
+        val status = OlcboxVpnState.status.value
+        val isActive = status is VpnStatus.Connected ||
+            status is VpnStatus.Connecting ||
+            status is VpnStatus.Reconnecting
 
-        val isConnected = OlcboxVpnState.isConnected.value
-
-        if (isConnected) {
+        if (isActive) {
             stopVpn()
         } else {
-            // VpnService.prepare() returns null when permission is already held.
             val prepIntent = VpnService.prepare(applicationContext)
             if (prepIntent == null) {
                 startVpn()
             } else {
-                // Permission not yet granted — open the main app so the dialog can appear.
                 openMainApp()
             }
         }
     }
 
-    // ──────────────────────────────────────────────────────────────────────
-    // VPN control
-    // ──────────────────────────────────────────────────────────────────────
-
     private fun startVpn() {
-        val intent = Intent().apply {
-            setClassName(packageName, OlcboxVpnActions.SERVICE_CLASS_NAME)
-            action = OlcboxVpnActions.ACTION_START_VPN
-        }
+        val intent = buildStartIntent()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             ContextCompat.startForegroundService(applicationContext, intent)
         } else {
             startService(intent)
+        }
+        updateTile(VpnStatus.Connecting)
+    }
+
+    private fun buildStartIntent(): Intent {
+        val preferences = runCatching {
+            runBlocking { applicationContext.vpnPrefDataStore.data.first() }
+        }.getOrNull()
+
+        return Intent().apply {
+            setClassName(packageName, OlcboxVpnActions.SERVICE_CLASS_NAME)
+            action = OlcboxVpnActions.ACTION_START_VPN
+            putExtra(
+                OlcboxVpnActions.EXTRA_CONNECTION_MODE,
+                AndroidConnectionMode.fromValue(
+                    preferences?.get(KEY_ANDROID_CONNECTION_MODE)
+                ).value,
+            )
+            putExtra(
+                OlcboxVpnActions.EXTRA_SOCKS_HOST,
+                AndroidSocksProxySettings.sanitizeHost(preferences?.get(KEY_ANDROID_SOCKS_HOST)),
+            )
+            putExtra(
+                OlcboxVpnActions.EXTRA_SOCKS_PORT,
+                AndroidSocksProxySettings.sanitizePort(preferences?.get(KEY_ANDROID_SOCKS_PORT)),
+            )
+            putExtra(
+                OlcboxVpnActions.EXTRA_SOCKS_USERNAME,
+                preferences?.get(KEY_ANDROID_SOCKS_USERNAME).orEmpty(),
+            )
+            putExtra(
+                OlcboxVpnActions.EXTRA_SOCKS_PASSWORD,
+                preferences?.get(KEY_ANDROID_SOCKS_PASSWORD).orEmpty(),
+            )
+            putExtra(
+                OlcboxVpnActions.EXTRA_SPLIT_TUNNEL_MODE,
+                AndroidSplitTunnelMode.fromValue(
+                    preferences?.get(KEY_ANDROID_SPLIT_TUNNEL_MODE)
+                ).value,
+            )
+            putStringArrayListExtra(
+                OlcboxVpnActions.EXTRA_SPLIT_TUNNEL_PROXY_APPS,
+                ArrayList(preferences?.get(KEY_ANDROID_SPLIT_TUNNEL_PROXY_APPS).orEmpty()),
+            )
+            putStringArrayListExtra(
+                OlcboxVpnActions.EXTRA_SPLIT_TUNNEL_BYPASS_APPS,
+                ArrayList(preferences?.get(KEY_ANDROID_SPLIT_TUNNEL_BYPASS_APPS).orEmpty()),
+            )
+            putExtra(
+                OlcboxVpnActions.EXTRA_MIHOMO_MODE,
+                MihomoModeStore.resolve(
+                    context = applicationContext,
+                    dataStoreValue = preferences?.get(KEY_MIHOMO_MODE),
+                ),
+            )
         }
     }
 
@@ -117,10 +169,6 @@ class QuickSettingsTileService : TileService() {
         }
     }
 
-    // ──────────────────────────────────────────────────────────────────────
-    // Tile appearance
-    // ──────────────────────────────────────────────────────────────────────
-
     private fun updateTile(status: VpnStatus) {
         val tile = qsTile ?: return
         when (status) {
@@ -147,6 +195,16 @@ class QuickSettingsTileService : TileService() {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     tile.subtitle = getString(R.string.qs_tile_disconnected)
                 }
+            }
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            runCatching {
+                tile.setIcon(
+                    android.graphics.drawable.Icon.createWithResource(
+                        this,
+                        R.drawable.ic_stat_ptrk,
+                    )
+                )
             }
         }
         tile.updateTile()

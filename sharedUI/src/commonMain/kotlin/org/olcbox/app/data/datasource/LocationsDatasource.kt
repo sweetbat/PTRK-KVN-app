@@ -368,11 +368,12 @@ class LocationsRepositoryImpl(
             .filterKeys { onlyUrls == null || it in onlyUrls }
         var successful = 0
         val companionUrls = linkedSetOf<String>()
+        var lastFailure: String? = null
         for ((url, snapshot) in groups) {
             // Network I/O must not hold the storage lock: users can select or delete
             // locations while a subscription server is unreachable.
             val timestamp = nowEpochMs()
-            val resolved = resolveParsedImport(
+            val resolvedResult = resolveParsedImportDetailed(
                 text = url,
                 fallbackSubscriptionInterval = snapshot.subscriptionUpdateIntervalMs(),
                 subscriptionProxy = subscriptionProxy,
@@ -380,6 +381,11 @@ class LocationsRepositoryImpl(
                     it.metadata?.subscription?.allowInsecureRequests == true
                 } || url.startsWith("http://", ignoreCase = true)
             )
+            val resolved = (resolvedResult as? ResolvedImportResult.Success)?.value
+            if (resolved == null) {
+                lastFailure = (resolvedResult as? ResolvedImportResult.Failure)?.message
+                    ?: "Could not download subscription"
+            }
             PtrkSubscriptionCompanion.olcRtcCompanionUrl(url)?.let { companionUrls += it }
             mutationMutex.withLock {
                 val current = getBundleUnlocked()
@@ -420,6 +426,9 @@ class LocationsRepositoryImpl(
         }.toSet()
         if (pendingCompanions.isNotEmpty()) {
             successful += refreshSubscriptionsMatching(pendingCompanions, subscriptionProxy)
+        }
+        if (successful == 0 && lastFailure != null && !groups.isEmpty()) {
+            throw IllegalStateException(lastFailure)
         }
         return successful
     }
