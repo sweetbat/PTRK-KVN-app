@@ -854,11 +854,14 @@ class OlcboxVpnService : VpnService() {
         delay(TUNNEL_HANDOFF_DELAY_MS)
         coroutineContext.ensureActive()
 
-        // Keep PTRK inside the TUN (Telegram / normal traffic via hev→Mobile).
-        // Subscription/update still uses a loopback HTTP CONNECT bridge → Mobile SOCKS
-        // so OkHttp does DNS inside the tunnel (mapdns alone + multi-UA retries hung forever).
-        // 127.0.0.1 never enters the TUN, so this does not loop.
-        val pfd = establishSystemVpnTunnel(excludeSelfFromVpn = false)
+        // Same layout as Mihomo: PTRK is excluded from TUN and refreshes via local
+        // mixed-port 7890. Keeping the app inside TUN broke 127.0.0.1→bridge on
+        // whitelist OEMs and made sub/update hang while Mihomo still worked.
+        if (!startOlcRtcFetchBridge()) {
+            addLog("olcRTC fetch bridge failed — subscription refresh may stall")
+        }
+
+        val pfd = establishSystemVpnTunnel(excludeSelfFromVpn = true)
         if (pfd == null) {
             stopMobileAndWait()
             return
@@ -870,17 +873,13 @@ class OlcboxVpnService : VpnService() {
             return
         }
 
-        if (!startOlcRtcFetchBridge()) {
-            addLog("olcRTC fetch bridge failed — subscription refresh may stall")
-        }
-
         coroutineContext.ensureActive()
         if (requestedGeneration != generation) return
 
         setStatus(VpnStatus.Connected)
         resetRecoveryState()
         updateNotification(connectedNotificationText())
-        addLog("VPN tunnel established (olcRTC; app in TUN + loopback fetch bridge)")
+        addLog("VPN tunnel established (olcRTC; app excluded like Mihomo, fetch via :7890 bridge)")
         startWatchdog()
     }
 
@@ -1138,7 +1137,7 @@ class OlcboxVpnService : VpnService() {
                 if (excludeSelfFromVpn) {
                     addDisallowedApp(builder, packageName, "PTRK-KVN")
                 } else {
-                    addLog("PTRK-KVN stays in TUN (olcRTC sub/update via hev)")
+                    addLog("PTRK-KVN stays in TUN")
                 }
                 extraBypassPackages
                     .map { it.trim() }
@@ -1343,6 +1342,14 @@ class OlcboxVpnService : VpnService() {
                         addLog("Watchdog: SOCKS port is not accepting connections")
                         requestTransportRecovery("SOCKS port unavailable", fullRestart = true)
                         return@launch
+                    }
+
+                    // Sub/update go through the :7890 bridge — restart it if it died.
+                    !isLocalSocksPortOpen(OlcRtcRoutingConfig.MIXED_PORT) -> {
+                        addLog("Watchdog: olcRTC fetch bridge :${OlcRtcRoutingConfig.MIXED_PORT} down — restarting")
+                        if (!startOlcRtcFetchBridge()) {
+                            addLog("Watchdog: fetch bridge restart failed")
+                        }
                     }
                 }
 

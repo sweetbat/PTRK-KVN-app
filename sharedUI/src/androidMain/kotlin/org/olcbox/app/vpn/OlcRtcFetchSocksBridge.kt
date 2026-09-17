@@ -124,9 +124,10 @@ class OlcRtcFetchSocksBridge(
         }
 
         // Serialize fetches so one hung CONNECT cannot pile onto Mobile SOCKS.
-        if (!sessionPermit.tryAcquire()) {
+        if (!sessionPermit.tryAcquire(SESSION_WAIT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)) {
             clientOut.write("HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\n\r\n".toByteArray())
             clientOut.flush()
+            log("fetch bridge busy — rejected CONNECT $host:$port")
             return
         }
         try {
@@ -148,10 +149,10 @@ class OlcRtcFetchSocksBridge(
                 clientOut.write("HTTP/1.1 200 Connection Established\r\n\r\n".toByteArray())
                 clientOut.flush()
 
-                // Unlimited idle during body transfer — WebRTC is slow; a 14s soTimeout
-                // or join+close after c2b EOF truncates TLS → BAD_RECORD_MAC.
-                client.soTimeout = 0
-                backend.soTimeout = 0
+                // Idle timeout only (between reads). Do not close after c2b EOF —
+                // HTTPS clients go quiet while the response body still flows.
+                client.soTimeout = RELAY_IDLE_TIMEOUT_MS
+                backend.soTimeout = RELAY_IDLE_TIMEOUT_MS
                 pipeBidirectional(client, backend)
             }
         } finally {
@@ -188,8 +189,9 @@ class OlcRtcFetchSocksBridge(
         }
         val portBytes = ByteArray(2).also { clientIn.readFully(it) }
 
-        if (!sessionPermit.tryAcquire()) {
+        if (!sessionPermit.tryAcquire(SESSION_WAIT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)) {
             replySocksFailure(clientOut)
+            log("fetch bridge busy — rejected SOCKS")
             return
         }
         try {
@@ -231,8 +233,8 @@ class OlcRtcFetchSocksBridge(
                 clientOut.flush()
                 if (repHdr[1] != REP_SUCCEEDED) return
 
-                client.soTimeout = 0
-                backend.soTimeout = 0
+                client.soTimeout = RELAY_IDLE_TIMEOUT_MS
+                backend.soTimeout = RELAY_IDLE_TIMEOUT_MS
                 pipeBidirectional(client, backend)
             }
         } finally {
@@ -374,6 +376,9 @@ class OlcRtcFetchSocksBridge(
         const val ATYP_DOMAIN: Byte = 0x03
         const val ATYP_IPV6: Byte = 0x04
         const val CONNECT_TIMEOUT_MS = 8_000
+        /** Abort only if no bytes for this long — WebRTC can be slow but not frozen. */
+        const val RELAY_IDLE_TIMEOUT_MS = 90_000
+        const val SESSION_WAIT_MS = 45_000L
         const val RELAY_BUF = 32 * 1024
     }
 }

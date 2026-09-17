@@ -565,9 +565,8 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
             return null
         }
 
-        // Mihomo: Clash mixed-port (app is excluded from TUN).
-        // olcRTC: HTTP CONNECT bridge on 7890 (loopback) in both TUN and Proxy modes —
-        // DNS + CONNECT stay inside Mobile; avoids mapdns multi-retry hangs on whitelist.
+        // Mihomo: Clash mixed-port (app excluded from TUN).
+        // olcRTC: same — app excluded, HTTP CONNECT bridge on 7890 → Mobile SOCKS.
         return SubscriptionFetchProxy(
             host = "127.0.0.1",
             port = 7890,
