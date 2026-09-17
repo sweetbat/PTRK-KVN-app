@@ -88,21 +88,19 @@ class HomeScreenViewModel(
                         VpnStatus.Connected -> it.copy(
                             isVpnConnected = true,
                             isVpnLoading = false,
-                            // Always re-read store so server-switch clears are not stuck
-                            // behind a stale in-memory timestamp.
+                            // Timer only while actually Connected — never during Connecting.
                             connectedSinceEpochMs = vpnManager.connectedSinceEpochMs()
                                 ?: System.currentTimeMillis(),
                         )
                         VpnStatus.Connecting -> it.copy(
                             isVpnConnected = false,
                             isVpnLoading = true,
-                            connectedSinceEpochMs = vpnManager.connectedSinceEpochMs(),
+                            // Never show a stale uptime while connecting.
+                            connectedSinceEpochMs = null,
                         )
                         VpnStatus.Reconnecting -> it.copy(
-                            // Show as connecting spinner, not "Connected" + spinner.
-                            // Do not clear timer here — network migration reconnects also
-                            // use Reconnecting; server-switch reset is in restartVpnIfRunning
-                            // + VpnConnectedSinceStore.clear(isRestart).
+                            // Spinner, not "Connected". Keep timer only if we did not
+                            // clear it for a server switch (null stays null).
                             isVpnConnected = false,
                             isVpnLoading = true,
                         )
@@ -229,11 +227,16 @@ class HomeScreenViewModel(
         }
 
         viewModelScope.launch {
-            _state.update { it.copy(isVpnLoading = true) }
             try {
                 if (_state.value.isVpnConnected || vpnManager.status.value is VpnStatus.Connected) {
+                    _state.update { it.copy(isVpnLoading = true) }
                     vpnManager.stopVpn()
                 } else {
+                    // Fresh connect: never resurrect an old uptime before Connected.
+                    vpnManager.resetConnectedSince()
+                    _state.update {
+                        it.copy(isVpnLoading = true, connectedSinceEpochMs = null)
+                    }
                     val active = locationsRepository.getActiveLocation()
                     if (active == null || !active.location.isComplete()) {
                         _state.update {
@@ -248,7 +251,7 @@ class HomeScreenViewModel(
                     prepareOlcSubExitThenStart(active)
                 }
             } catch (e: Exception) {
-                _state.update { it.copy(isVpnLoading = false) }
+                _state.update { it.copy(isVpnLoading = false, connectedSinceEpochMs = null) }
             }
         }
     }

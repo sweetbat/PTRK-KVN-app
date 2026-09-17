@@ -2,6 +2,8 @@ package org.olcbox.app.vpn
 
 import java.io.DataInputStream
 import java.io.DataOutputStream
+import java.io.EOFException
+import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
@@ -65,6 +67,12 @@ class OlcRtcFetchSocksBridge(
             thread(name = "OlcRtcFetchSocksClient", isDaemon = true) {
                 try {
                     handleClient(client)
+                } catch (_: EOFException) {
+                    // Client closed mid-handshake (OkHttp cancel / probe) — not a crash.
+                } catch (_: IOException) {
+                    // Broken pipe / reset — normal for short-lived fetch sockets.
+                } catch (t: Throwable) {
+                    log("fetch SOCKS client error: ${t.javaClass.simpleName}: ${t.message}")
                 } finally {
                     synchronized(sockets) { sockets.remove(client) }
                     runCatching { client.close() }
@@ -78,7 +86,6 @@ class OlcRtcFetchSocksBridge(
         val clientOut = DataOutputStream(client.getOutputStream())
         if (!handshakeClientNoAuth(clientIn, clientOut)) return
 
-        // Peek CONNECT request from client — forward after backend auth.
         val connectHdr = ByteArray(4)
         clientIn.readFully(connectHdr)
         if (connectHdr[0] != SOCKS_VERSION || connectHdr[1] != CMD_CONNECT) {
@@ -117,7 +124,6 @@ class OlcRtcFetchSocksBridge(
             backendOut.write(portBytes)
             backendOut.flush()
 
-            // Forward CONNECT reply (variable length) then pipe.
             val repHdr = ByteArray(4)
             backendIn.readFully(repHdr)
             clientOut.write(repHdr)

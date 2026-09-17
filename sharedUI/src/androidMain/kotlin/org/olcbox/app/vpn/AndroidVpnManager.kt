@@ -231,6 +231,7 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
 
     override fun startVpn() {
         org.olcbox.app.vpn.service.VpnStatusBridge.markConnecting()
+        resetConnectedSince()
         prepareActiveEngine()
         val intent = buildStartIntent()
         launchVpnService(intent)
@@ -574,16 +575,16 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
 
     override fun connectedSinceEpochMs(): Long? {
         val status = status.value
-        if (status !is VpnStatus.Connected && status !is VpnStatus.Reconnecting) {
-            // UI process may have restarted while :vpn stayed Connected.
-            if (VpnConnectedSinceStore.read(appContext) != null &&
-                VpnServiceStatusStore.isLikelyConnected(appContext)
-            ) {
+        when (status) {
+            is VpnStatus.Connected, is VpnStatus.Reconnecting ->
                 return VpnConnectedSinceStore.read(appContext)
-            }
-            return null
+            else -> Unit
         }
-        return VpnConnectedSinceStore.read(appContext)
+        // UI process may have restarted while :vpn stayed Connected.
+        if (VpnServiceStatusStore.isLikelyConnected(appContext)) {
+            return VpnConnectedSinceStore.read(appContext)
+        }
+        return null
     }
 
     override fun resetConnectedSince() {

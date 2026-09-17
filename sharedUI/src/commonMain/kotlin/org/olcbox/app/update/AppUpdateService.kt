@@ -63,29 +63,40 @@ class AppUpdateService(
     suspend fun check(
         channel: ReleaseChannel,
         proxy: SubscriptionFetchProxy? = null
-    ): Result<AppUpdateInfo> = runCatching {
-        val release = fetchRelease(channel, proxy)
-        val asset = selectAsset(release.assets, platform)
-            ?: error(
-                "No ${platform.assetToken.joinToString(" + ")} update asset in ${release.tagName}. " +
-                        "Expected asset name containing ${platform.assetToken.joinToString(", ")}" +
-                        platform.preferredExtensions.takeIf { it.isNotEmpty() }
-                            ?.joinToString(prefix = " and ending with one of: ")
-                            .orEmpty()
-            )
+    ): Result<AppUpdateInfo> {
+        var lastError: Throwable? = null
+        repeat(3) { attempt ->
+            val result = runCatching {
+                val release = fetchRelease(channel, proxy)
+                val asset = selectAsset(release.assets, platform)
+                    ?: error(
+                        "No ${platform.assetToken.joinToString(" + ")} update asset in ${release.tagName}. " +
+                            "Expected asset name containing ${platform.assetToken.joinToString(", ")}" +
+                            platform.preferredExtensions.takeIf { it.isNotEmpty() }
+                                ?.joinToString(prefix = " and ending with one of: ")
+                                .orEmpty()
+                    )
 
-        AppUpdateInfo(
-            channel = channel,
-            version = updateVersion(channel, release.tagName, asset),
-            htmlUrl = release.htmlUrl,
-            publishedAt = release.publishedAt,
-            asset = asset,
-            isUpdateAvailable = isUpdateAvailable(
-                channel = channel,
-                releaseTag = updateVersion(channel, release.tagName, asset),
-                currentVersion = currentVersion
-            )
-        )
+                AppUpdateInfo(
+                    channel = channel,
+                    version = updateVersion(channel, release.tagName, asset),
+                    htmlUrl = release.htmlUrl,
+                    publishedAt = release.publishedAt,
+                    asset = asset,
+                    isUpdateAvailable = isUpdateAvailable(
+                        channel = channel,
+                        releaseTag = updateVersion(channel, release.tagName, asset),
+                        currentVersion = currentVersion
+                    )
+                )
+            }
+            if (result.isSuccess) return result
+            lastError = result.exceptionOrNull()
+            if (attempt < 2) {
+                kotlinx.coroutines.delay(800L * (attempt + 1))
+            }
+        }
+        return Result.failure(lastError ?: IllegalStateException("update check failed"))
     }
 
     suspend fun fetchRelease(
@@ -423,7 +434,7 @@ private val json = Json {
 private fun createUpdateHttpClient(proxy: SubscriptionFetchProxy? = null): HttpClient =
     createProxyHttpClient(
         subscriptionProxy = proxy,
-        connectTimeoutMs = 5_000,
-        requestTimeoutMs = 15_000,
-        socketTimeoutMs = 15_000
+        connectTimeoutMs = 12_000,
+        requestTimeoutMs = 35_000,
+        socketTimeoutMs = 35_000
     )

@@ -20,6 +20,8 @@ import kotlinx.coroutines.runBlocking
 import org.olcbox.app.vpn.AndroidConnectionMode
 import org.olcbox.app.vpn.AndroidSocksProxySettings
 import org.olcbox.app.vpn.AndroidSplitTunnelMode
+import org.olcbox.app.vpn.VpnConnectedSinceStore
+import org.olcbox.app.vpn.VpnServiceStatusStore
 import org.olcbox.app.vpn.VpnStatus
 import org.olcbox.app.vpn.data.KEY_ANDROID_CONNECTION_MODE
 import org.olcbox.app.vpn.data.KEY_ANDROID_SPLIT_TUNNEL_BYPASS_APPS
@@ -33,11 +35,13 @@ import org.olcbox.app.vpn.data.KEY_MIHOMO_MODE
 import org.olcbox.app.vpn.data.MihomoModeStore
 import org.olcbox.app.vpn.data.vpnPrefDataStore
 import org.olcbox.app.vpn.service.OlcboxVpnActions
-import org.olcbox.app.vpn.service.OlcboxVpnState
 import org.olcbox.app.vpn.service.VpnStatusBridge
 
 /**
  * Quick Settings tile — toggles VPN to the last selected (active) server.
+ *
+ * Uses [VpnStatusBridge] (cross-process) + sticky [VpnServiceStatusStore], not
+ * in-memory [org.olcbox.app.vpn.service.OlcboxVpnState] which only lives in `:vpn`.
  */
 @RequiresApi(Build.VERSION_CODES.N)
 class QuickSettingsTileService : TileService() {
@@ -47,11 +51,21 @@ class QuickSettingsTileService : TileService() {
     override fun onStartListening() {
         super.onStartListening()
         VpnStatusBridge.ensureRegistered(applicationContext)
+        // Shade reopen / cold tile process: rehydrate from sticky markers.
+        if (VpnServiceStatusStore.isLikelyConnected(applicationContext)) {
+            VpnStatusBridge.restoreConnectedFromService()
+        } else if (
+            VpnStatusBridge.status.value is VpnStatus.Connected &&
+            !VpnServiceStatusStore.isVpnProcessAlive(applicationContext)
+        ) {
+            VpnStatusBridge.markDisconnected()
+        }
+        scope?.cancel()
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-        OlcboxVpnState.status
-            .onEach { status -> updateTile(status) }
+        VpnStatusBridge.status
+            .onEach { status -> updateTile(resolveDisplayStatus(status)) }
             .launchIn(scope!!)
-        updateTile(OlcboxVpnState.status.value)
+        updateTile(resolveDisplayStatus(VpnStatusBridge.status.value))
     }
 
     override fun onStopListening() {
@@ -62,13 +76,14 @@ class QuickSettingsTileService : TileService() {
 
     override fun onClick() {
         super.onClick()
-        val status = OlcboxVpnState.status.value
+        val status = resolveDisplayStatus(VpnStatusBridge.status.value)
         val isActive = status is VpnStatus.Connected ||
             status is VpnStatus.Connecting ||
             status is VpnStatus.Reconnecting
 
         if (isActive) {
             stopVpn()
+            updateTile(VpnStatus.Stopping)
         } else {
             val prepIntent = VpnService.prepare(applicationContext)
             if (prepIntent == null) {
@@ -79,7 +94,25 @@ class QuickSettingsTileService : TileService() {
         }
     }
 
+    /** Prefer sticky VPN markers when bridge memory is stale after shade reopen. */
+    private fun resolveDisplayStatus(bridge: VpnStatus): VpnStatus {
+        if (bridge is VpnStatus.Connected ||
+            bridge is VpnStatus.Connecting ||
+            bridge is VpnStatus.Reconnecting ||
+            bridge is VpnStatus.Stopping
+        ) {
+            return bridge
+        }
+        return if (VpnServiceStatusStore.isLikelyConnected(applicationContext)) {
+            VpnStatus.Connected
+        } else {
+            bridge
+        }
+    }
+
     private fun startVpn() {
+        VpnConnectedSinceStore.clear(applicationContext)
+        VpnStatusBridge.markConnecting()
         val intent = buildStartIntent()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             ContextCompat.startForegroundService(applicationContext, intent)
@@ -149,6 +182,7 @@ class QuickSettingsTileService : TileService() {
             action = OlcboxVpnActions.ACTION_STOP_VPN
         }
         startService(intent)
+        VpnStatusBridge.markStopping()
     }
 
     private fun openMainApp() {
@@ -180,7 +214,7 @@ class QuickSettingsTileService : TileService() {
                     tile.subtitle = getString(R.string.qs_tile_connected)
                 }
             }
-            is VpnStatus.Connecting, is VpnStatus.Reconnecting -> {
+            is VpnStatus.Connecting, is VpnStatus.Reconnecting, is VpnStatus.Stopping -> {
                 tile.state = Tile.STATE_ACTIVE
                 tile.label = getString(R.string.qs_tile_label)
                 tile.contentDescription = getString(R.string.qs_tile_connecting)

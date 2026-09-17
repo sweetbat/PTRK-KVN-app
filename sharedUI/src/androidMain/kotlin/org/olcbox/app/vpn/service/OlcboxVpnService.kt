@@ -2051,6 +2051,7 @@ class OlcboxVpnService : VpnService() {
     private fun setStatus(status: VpnStatus) {
         when (status) {
             VpnStatus.Connected -> {
+                // Always stamp a fresh time if store was cleared for this connect.
                 org.olcbox.app.vpn.VpnConnectedSinceStore.markConnected(applicationContext)
                 org.olcbox.app.vpn.VpnServiceStatusStore.markConnected(applicationContext)
             }

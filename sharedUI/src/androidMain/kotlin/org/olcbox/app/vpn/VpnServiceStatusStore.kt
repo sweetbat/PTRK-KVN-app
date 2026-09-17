@@ -31,8 +31,12 @@ object VpnServiceStatusStore {
         return am.runningAppProcesses.orEmpty().any { it.processName == vpnName }
     }
 
+    /**
+     * True only when the sticky marker is set AND `:vpn` is actually alive.
+     * Do not treat [VpnConnectedSinceStore] alone as connected — that resurrected
+     * stale uptime timers when the tunnel was already down.
+     */
     fun isLikelyConnected(context: Context): Boolean {
-        return isMarkedConnected(context) &&
-            (isVpnProcessAlive(context) || VpnConnectedSinceStore.read(context) != null)
+        return isMarkedConnected(context) && isVpnProcessAlive(context)
     }
 }
