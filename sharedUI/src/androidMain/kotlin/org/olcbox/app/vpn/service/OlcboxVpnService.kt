@@ -128,6 +128,7 @@ class OlcboxVpnService : VpnService() {
     private var watchdogStalledSamples = 0
     private var lastWakeLockRefreshAtMs = 0L
     private var lastHealAtMs = 0L
+    private var lastRestartHealAtMs = 0L
     private var screenAwakeReceiver: android.content.BroadcastReceiver? = null
     @Volatile
     private var lastRtcConnectedAtMs = 0L
@@ -304,7 +305,8 @@ class OlcboxVpnService : VpnService() {
             }
 
             OlcboxVpnActions.ACTION_HEAL_TRANSPORT -> {
-                healTransportAfterFetch()
+                val restart = intent.getBooleanExtra(OlcboxVpnActions.EXTRA_HEAL_RESTART, false)
+                healTransportAfterFetch(restartTransport = restart)
                 return START_STICKY
             }
 
@@ -1757,24 +1759,37 @@ class OlcboxVpnService : VpnService() {
     }
 
     /**
-     * Light cleanup after subscription/APK fetch. Must NOT restart Mobile/TUN —
-     * that caused reconnect storms on every app open and killed mid-download.
+     * After subscription/APK fetch.
+     * @param restartTransport olcRTC only: soft-restart Mobile once so Telegram works
+     *   again. Must not be used on app-open (that caused reconnect storms).
      */
-    private fun healTransportAfterFetch() {
+    private fun healTransportAfterFetch(restartTransport: Boolean = false) {
         val status = OlcboxVpnState.status.value
-        if (status !is VpnStatus.Connected) return
+        if (status !is VpnStatus.Connected && status !is VpnStatus.Reconnecting) return
         val now = System.currentTimeMillis()
-        if (now - lastHealAtMs < HEAL_DEBOUNCE_MS) return
-        lastHealAtMs = now
         refreshWakeLock(force = true)
         if (mihomoTunActive) {
+            if (now - lastHealAtMs < HEAL_DEBOUNCE_MS) return
+            lastHealAtMs = now
             runCatching { MihomoEngine.resetConnections() }
             addLog("Cleared Mihomo idle connections")
             return
         }
-        // olcRTC: only drop hung Clash→SOCKS dials in :route. No transport restart.
         OlcRtcRoutingService.resetConnections(applicationContext)
-        addLog("Cleared olcRTC fetch connections")
+        if (restartTransport && status is VpnStatus.Connected) {
+            if (now - lastRestartHealAtMs < RESTART_HEAL_DEBOUNCE_MS) return
+            lastRestartHealAtMs = now
+            addLog("Soft-restarting olcRTC after fetch")
+            requestTransportRecovery(
+                reason = "heal after fetch",
+                fullRestart = false,
+                setReconnectingImmediately = true,
+            )
+        } else {
+            if (now - lastHealAtMs < HEAL_DEBOUNCE_MS) return
+            lastHealAtMs = now
+            addLog("Cleared olcRTC fetch connections")
+        }
     }
 
     private fun onScreenAwake() {
@@ -2454,6 +2469,7 @@ class OlcboxVpnService : VpnService() {
         // Was 2 min — screen-off for ~5 min left Mihomo/Hy2 dead until manual reconnect.
         private const val WAKE_LOCK_TIMEOUT_MS = 10 * 60 * 1000L
         private const val HEAL_DEBOUNCE_MS = 45_000L
+        private const val RESTART_HEAL_DEBOUNCE_MS = 20_000L
         private const val TUN_MTU = 1500
         private const val TUN_IPV4_ADDRESS = "10.0.88.88"
         private const val TUN_IPV6_ADDRESS = "fd00:88::88"

@@ -821,9 +821,9 @@ class LocationsRepositoryImpl(
                         hwid = hwid,
                         allowInsecureRequests = allowInsecureRequests,
                         // Through VPN: keep fetches short so WebRTC is not starved.
-                        connectTimeoutMs = if (subscriptionProxy != null) 8_000 else 6_000,
-                        requestTimeoutMs = if (subscriptionProxy != null) 22_000 else 18_000,
-                        socketTimeoutMs = if (subscriptionProxy != null) 22_000 else 18_000,
+                        connectTimeoutMs = if (subscriptionProxy != null) 6_000 else 6_000,
+                        requestTimeoutMs = if (subscriptionProxy != null) 18_000 else 18_000,
+                        socketTimeoutMs = if (subscriptionProxy != null) 18_000 else 18_000,
                         subscriptionProxy = subscriptionProxy,
                     )
                 } catch (error: Throwable) {

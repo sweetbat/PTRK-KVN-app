@@ -7,8 +7,10 @@ import java.io.File
  * Minimal Clash profile for olcRTC **fetch only** (subscription / app update).
  *
  * Must NOT import Remnawave rule-providers / GEOIP — those download on startup and
- * fail under whitelist before PROXY is usable (Clash router then falls back to the
- * DIY bridge, which starves the WebRTC pipe).
+ * fail under whitelist before PROXY is usable.
+ *
+ * DNS uses fake-ip so CONNECT hostnames are dialed as domains through Mobile SOCKS
+ * (redir-host + public DNS often returns wrong/blocked A records on whitelist).
  *
  * libclash cannot share a process with libgojni, so this YAML is loaded in `:route`.
  */
@@ -47,7 +49,13 @@ object OlcRtcRoutingConfig {
             appendLine("  enable: true")
             appendLine("  ipv6: false")
             appendLine("  use-system-hosts: false")
-            appendLine("  enhanced-mode: redir-host")
+            // fake-ip: keep hostname for SOCKS dial (remote DNS inside olcRTC).
+            appendLine("  enhanced-mode: fake-ip")
+            appendLine("  fake-ip-range: 198.18.0.1/16")
+            appendLine("  fake-ip-filter:")
+            appendLine("    - '*.lan'")
+            appendLine("    - localhost")
+            appendLine("    - '*.local'")
             appendLine("  default-nameserver:")
             appendLine("    - 77.88.8.8")
             appendLine("    - 77.88.8.1")

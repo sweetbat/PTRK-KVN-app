@@ -100,7 +100,11 @@ fun AndroidMainScreen(
         AndroidUpdateInstaller(
             context = context,
             proxyProvider = { vpnManager.subscriptionFetchProxy() },
-            healTransport = { vpnManager.healTransportAfterFetch() },
+            healTransport = {
+                vpnManager.healTransportAfterFetch(
+                    restartTransport = vpnManager.isOlcrtcFetchSession(),
+                )
+            },
         )
     }
     var updateSettings by remember { mutableStateOf(AppUpdateSettings()) }
@@ -543,17 +547,31 @@ fun AndroidMainScreen(
                 shareSheetPayload = "Subscription QR" to ConfigShareService.subscriptionQrText(url)
             },
             onSubscriptionRefreshClick = { url, onFinished ->
-                viewModel.refreshSubscription(url) { updatedCount ->
-                    reloadLocationsAfterImport {
-                        viewModel.restartVpnIfRunning()
-                        Toast.makeText(
-                            context,
-                            if (updatedCount > 0) "Subscription updated" else "Subscription not updated",
-                            Toast.LENGTH_SHORT
-                        ).show()
+                val olcrtc = viewModel.isOlcrtcFetchSession()
+                viewModel.refreshSubscription(
+                    subscriptionUrl = url,
+                    restoreTransportAfter = olcrtc,
+                    onComplete = { updatedCount ->
+                        reloadLocationsAfterImport {
+                            if (!olcrtc) {
+                                viewModel.restartVpnIfRunning()
+                            }
+                            Toast.makeText(
+                                context,
+                                if (updatedCount > 0) "Subscription updated" else "Subscription not updated",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                            onFinished()
+                        }
+                    },
+                    onError = { message ->
+                        if (olcrtc) {
+                            viewModel.restoreOlcrtcAfterFetch()
+                        }
+                        Toast.makeText(context, message, Toast.LENGTH_LONG).show()
                         onFinished()
-                    }
-                }
+                    },
+                )
             },
             onSubscriptionRefreshIntervalChanged = { url, intervalMs ->
                 viewModel.setSubscriptionRefreshInterval(url, intervalMs) {

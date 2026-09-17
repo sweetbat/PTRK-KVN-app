@@ -106,36 +106,43 @@ fun HomeScreen(
         updatingSubscriptionUrl = urls.first()
         var index = 0
         var totalUpdated = 0
+        val olcrtcSession = viewModel.isOlcrtcFetchSession()
+        fun finishBatch(errorMessage: String? = null) {
+            locationViewModel.loadLocations {
+                if (olcrtcSession) {
+                    // Soft Mobile restart — full restartVpnIfRunning was overkill and raced.
+                    viewModel.restoreOlcrtcAfterFetch()
+                } else {
+                    viewModel.restartVpnIfRunning()
+                }
+                updatingSubscriptionUrl = null
+                scope.launch {
+                    snackbarHostState.showSnackbar(
+                        when {
+                            errorMessage != null -> S.couldNotUpdateSubscription(errorMessage)
+                            totalUpdated > 0 -> S.subscriptionUpdated
+                            else -> S.subscriptionsUpToDate
+                        }
+                    )
+                }
+            }
+        }
         fun next() {
             if (index >= urls.size) {
-                locationViewModel.loadLocations {
-                    viewModel.restartVpnIfRunning()
-                    updatingSubscriptionUrl = null
-                    scope.launch {
-                        snackbarHostState.showSnackbar(
-                            if (totalUpdated > 0) {
-                                S.subscriptionUpdated
-                            } else {
-                                S.subscriptionsUpToDate
-                            }
-                        )
-                    }
-                }
+                finishBatch()
                 return
             }
             val url = urls[index++]
             updatingSubscriptionUrl = url
             viewModel.refreshSubscription(
                 subscriptionUrl = url,
+                restoreTransportAfter = false,
                 onComplete = { updatedCount ->
                     totalUpdated += updatedCount
                     next()
                 },
                 onError = { message ->
-                    updatingSubscriptionUrl = null
-                    scope.launch {
-                        snackbarHostState.showSnackbar(S.couldNotUpdateSubscription(message))
-                    }
+                    finishBatch(errorMessage = message)
                 }
             )
         }

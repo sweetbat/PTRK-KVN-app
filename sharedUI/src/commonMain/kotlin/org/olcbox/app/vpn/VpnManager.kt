@@ -34,8 +34,12 @@ interface VpnManager {
     /** Clear persisted uptime (call on server switch before reconnect). */
     fun resetConnectedSince() = Unit
     /**
-     * Soft-heal tunnel after subscription/APK traffic (olcRTC shares Mobile SOCKS with
-     * Telegram; heavy fetch can leave the pipe dead until a reconnect).
+     * Soft-heal tunnel after subscription/APK traffic.
+     * @param restartTransport if true on olcRTC, soft-restarts Mobile once (restores
+     *   internet after fetch freeze). Never pass true from app-open auto-refresh.
      */
-    fun healTransportAfterFetch() = Unit
+    fun healTransportAfterFetch(restartTransport: Boolean = false) = Unit
+
+    /** True when connected olcRTC session (fetch shares Mobile SOCKS with Telegram). */
+    fun isOlcrtcFetchSession(): Boolean = false
 }

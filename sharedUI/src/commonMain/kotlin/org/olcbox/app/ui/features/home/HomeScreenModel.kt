@@ -493,31 +493,46 @@ class HomeScreenViewModel(
     }
 
     fun refreshSubscriptions(
-        onComplete: (updatedCount: Int) -> Unit = {}
+        onComplete: (updatedCount: Int) -> Unit = {},
+        onError: (message: String) -> Unit = {},
     ) {
         viewModelScope.launch {
-            val updatedCount = withTimeoutOrNull(60_000L) {
-                locationsRepository.refreshSubscriptions(
-                    subscriptionProxy = vpnManager.subscriptionFetchProxy()
-                )
-            } ?: 0
-            // Light cleanup only after a real fetch finished — never restart the tunnel.
-            if (updatedCount > 0) {
-                vpnManager.healTransportAfterFetch()
+            val olcrtc = vpnManager.isOlcrtcFetchSession()
+            try {
+                val updatedCount = withTimeoutOrNull(if (olcrtc) 35_000L else 60_000L) {
+                    locationsRepository.refreshSubscriptions(
+                        subscriptionProxy = vpnManager.subscriptionFetchProxy()
+                    )
+                }
+                if (updatedCount == null) {
+                    onError("Subscription update timed out")
+                } else {
+                    onComplete(updatedCount)
+                }
+                loadCurrentConfigNow()
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                onError(error.message ?: "Subscription update failed")
+                loadCurrentConfigNow()
+            } finally {
+                if (olcrtc) {
+                    vpnManager.healTransportAfterFetch(restartTransport = true)
+                }
             }
-            loadCurrentConfigNow()
-            onComplete(updatedCount)
         }
     }
 
     fun refreshSubscription(
         subscriptionUrl: String,
+        restoreTransportAfter: Boolean = true,
         onError: (message: String) -> Unit = {},
         onComplete: (updatedCount: Int) -> Unit = {}
     ) {
         viewModelScope.launch {
+            val olcrtc = vpnManager.isOlcrtcFetchSession()
             try {
-                val updatedCount = withTimeoutOrNull(55_000L) {
+                val updatedCount = withTimeoutOrNull(if (olcrtc) 30_000L else 55_000L) {
                     locationsRepository.refreshSubscription(
                         subscriptionUrl = subscriptionUrl,
                         subscriptionProxy = vpnManager.subscriptionFetchProxy()
@@ -528,18 +543,28 @@ class HomeScreenViewModel(
                     loadCurrentConfigNow()
                     return@launch
                 }
-                if (updatedCount > 0) {
-                    vpnManager.healTransportAfterFetch()
-                }
                 loadCurrentConfigNow()
                 onComplete(updatedCount)
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
                 onError(error.message ?: "Subscription update failed")
+            } finally {
+                // Batch refresh passes false and restores once after all URLs.
+                if (restoreTransportAfter && olcrtc) {
+                    vpnManager.healTransportAfterFetch(restartTransport = true)
+                }
             }
         }
     }
+
+    fun restoreOlcrtcAfterFetch() {
+        if (vpnManager.isOlcrtcFetchSession()) {
+            vpnManager.healTransportAfterFetch(restartTransport = true)
+        }
+    }
+
+    fun isOlcrtcFetchSession(): Boolean = vpnManager.isOlcrtcFetchSession()
 
     private fun startSubscriptionAutoRefresh() {
         viewModelScope.launch {
@@ -569,6 +594,8 @@ class HomeScreenViewModel(
     }
 
     private suspend fun refreshDueSubscriptionsIfNeeded() {
+        // olcRTC fetch shares Mobile SOCKS with Telegram — auto-refresh freezes the net.
+        if (vpnManager.isOlcrtcFetchSession()) return
         val updatedCount = withContext(Dispatchers.IO) {
             locationsRepository.refreshDueSubscriptions(
                 subscriptionProxy = vpnManager.subscriptionFetchProxy()
@@ -576,7 +603,6 @@ class HomeScreenViewModel(
         }
         if (updatedCount > 0) {
             loadCurrentConfigNow()
-            // Do not heal on app-open auto-refresh — that restarted VPN every launch.
         }
     }
 

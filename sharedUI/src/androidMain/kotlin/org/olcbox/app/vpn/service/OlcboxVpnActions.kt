@@ -6,6 +6,8 @@ object OlcboxVpnActions {
     const val ACTION_STOP_VPN = "org.olcbox.app.vpn.service.OlcboxVpnService.STOP"
     /** Soft-heal after subscription/APK fetch or screen-on (no full user reconnect). */
     const val ACTION_HEAL_TRANSPORT = "org.olcbox.app.vpn.service.OlcboxVpnService.HEAL"
+    /** When true with HEAL: soft-restart Mobile (olcRTC) to unfreeze after fetch. */
+    const val EXTRA_HEAL_RESTART = "org.olcbox.app.vpn.service.OlcboxVpnService.HEAL_RESTART"
     const val EXTRA_CONNECTION_MODE = "org.olcbox.app.vpn.service.OlcboxVpnService.CONNECTION_MODE"
     const val EXTRA_SOCKS_HOST = "org.olcbox.app.vpn.service.OlcboxVpnService.SOCKS_HOST"
     const val EXTRA_SOCKS_PORT = "org.olcbox.app.vpn.service.OlcboxVpnService.SOCKS_PORT"
