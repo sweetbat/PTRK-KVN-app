@@ -20,9 +20,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import mobile.Mobile
 import org.olcbox.app.data.model.LocationConfig
-import java.net.InetSocketAddress
 import java.net.ServerSocket
-import java.net.Socket
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
@@ -62,17 +60,20 @@ class OlcRtcProbeService : Service() {
                 bindProbeToUpstream()
                 val port = ServerSocket(0).use { it.localPort }
                 val mobile = Mobile.new_()
-                val urls = listOf(
-                    "https://www.gstatic.com/generate_204",
-                    "http://connectivitycheck.gstatic.com/generate_204",
-                )
-                var last: Long? = null
                 when (action) {
                     ACTION_CHECK -> mobile.check(
                         provider, transport, roomId, deviceId, key,
                         port.toLong(), 12_000L, vp8Fps.toLong(), vp8Batch.toLong()
                     )
                     else -> {
+                        // Prefer HTTP generate_204 — TLS to gstatic often fails on MTS
+                        // while WebRTC signalling still works.
+                        val urls = listOf(
+                            "http://connectivitycheck.gstatic.com/generate_204",
+                            "http://www.gstatic.com/generate_204",
+                            "https://www.gstatic.com/generate_204",
+                        )
+                        var last: Long? = null
                         for (url in urls) {
                             last = runCatching {
                                 mobile.ping(
@@ -80,6 +81,8 @@ class OlcRtcProbeService : Service() {
                                     port.toLong(), 12_000L, url,
                                     vp8Fps.toLong(), vp8Batch.toLong()
                                 )
+                            }.onFailure {
+                                Log.w(TAG, "ping url=$url failed: ${it.message}")
                             }.getOrNull()
                             if (last != null && last >= 0L) break
                         }
@@ -105,11 +108,9 @@ class OlcRtcProbeService : Service() {
     }
 
     /**
-     * Bind `:olcrtc` off the VPN TUN so whitelist/rule mode does not black-hole
-     * WebRTC signalling (esp. MTS cellular: ping offline while connect still works).
-     *
-     * Prefer cellular when available (MTS), then request a NOT_VPN network, then
-     * fall back to any non-VPN internet-capable network.
+     * Bind `:olcrtc` off the VPN TUN. Do NOT require a smoke-test to 1.1.1.1 —
+     * on MTS that probe often fails while WebRTC still works, and rejecting the
+     * only usable cellular network left the process on the VPN (ping=offline).
      */
     private fun bindProbeToUpstream() {
         val cm = getSystemService(ConnectivityManager::class.java) ?: return
@@ -120,15 +121,11 @@ class OlcRtcProbeService : Service() {
                 caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
         }
 
-        fun isCellular(network: Network): Boolean =
-            cm.getNetworkCapabilities(network)
-                ?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) == true
-
         fun score(network: Network): Int {
             val caps = cm.getNetworkCapabilities(network) ?: return 0
             var s = 1
-            // Prefer cellular for MTS whitelist ping (Wi‑Fi often ranked higher wrongly).
-            if (caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) s += 6
+            // Prefer cellular for MTS whitelist (Wi‑Fi was ranked higher and wrong).
+            if (caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) s += 8
             if (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) s += 3
             if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) s += 2
             return s
@@ -136,17 +133,8 @@ class OlcRtcProbeService : Service() {
 
         fun tryBind(network: Network): Boolean {
             val ok = runCatching { cm.bindProcessToNetwork(network) }.getOrDefault(false)
-            if (!ok) return false
-            // Smoke-test that sockets leave via this network (not black-holed).
-            val open = runCatching {
-                Socket().use { s ->
-                    network.bindSocket(s)
-                    s.connect(InetSocketAddress("1.1.1.1", 443), 1_500)
-                }
-                true
-            }.getOrDefault(false)
-            Log.i(TAG, "bind+probe $network → bind=$ok smoke=$open")
-            return open
+            Log.i(TAG, "bindProcessToNetwork($network) → $ok")
+            return ok
         }
 
         val existing = cm.allNetworks.filter(::usable).sortedByDescending(::score)
@@ -154,7 +142,6 @@ class OlcRtcProbeService : Service() {
             if (tryBind(network)) return
         }
 
-        // Actively request a non-VPN upstream (helps when allNetworks is empty/stale).
         val requested = AtomicReference<Network?>(null)
         val latch = CountDownLatch(1)
         val callback = object : ConnectivityManager.NetworkCallback() {
@@ -170,20 +157,13 @@ class OlcRtcProbeService : Service() {
             .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
             .build()
         runCatching { cm.requestNetwork(request, callback) }
-        latch.await(2_500L, TimeUnit.MILLISECONDS)
+        latch.await(3_000L, TimeUnit.MILLISECONDS)
         runCatching { cm.unregisterNetworkCallback(callback) }
 
         val fromRequest = requested.get()
         if (fromRequest != null && tryBind(fromRequest)) return
 
-        // Last resort: bind without smoke test (better than VPN TUN).
-        val fallback = existing.firstOrNull(::isCellular) ?: existing.firstOrNull()
-        if (fallback != null) {
-            val ok = runCatching { cm.bindProcessToNetwork(fallback) }.getOrDefault(false)
-            Log.w(TAG, "fallback bindProcessToNetwork($fallback) → $ok")
-        } else {
-            Log.w(TAG, "no upstream network for probe bind")
-        }
+        Log.w(TAG, "no upstream network for probe bind (VPN may black-hole ping)")
     }
 
     override fun onDestroy() {
@@ -213,7 +193,7 @@ class OlcRtcProbeService : Service() {
             locationConfig: LocationConfig,
             deviceId: String,
             action: String = ACTION_PING,
-            timeoutMs: Long = 18_000L,
+            timeoutMs: Long = 20_000L,
         ): Long? {
             val config = locationConfig.normalized()
             if (!config.isComplete()) return null

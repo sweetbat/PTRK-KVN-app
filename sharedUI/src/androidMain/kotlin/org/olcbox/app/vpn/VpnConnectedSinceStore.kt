@@ -17,11 +17,16 @@ object VpnConnectedSinceStore {
         }.getOrNull()
     }
 
-    /** Keep the original timestamp across reconnects within the same session. */
-    fun markConnected(context: Context) {
+    /**
+     * @param forceNew when true, always overwrite (server switch / restart).
+     * Default keeps the original timestamp across transport reconnects.
+     */
+    fun markConnected(context: Context, forceNew: Boolean = false) {
         val file = File(context.filesDir, FILE)
-        val existing = read(context)
-        if (existing != null && existing > 0L) return
+        if (!forceNew) {
+            val existing = read(context)
+            if (existing != null && existing > 0L) return
+        }
         runCatching { file.writeText(System.currentTimeMillis().toString()) }
     }
 

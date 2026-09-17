@@ -31,4 +31,6 @@ interface VpnManager {
         kotlinx.coroutines.flow.flowOf("rule")
     /** Wall-clock ms when the current VPN session connected; survives UI process death. */
     fun connectedSinceEpochMs(): Long? = null
+    /** Clear persisted uptime (call on server switch before reconnect). */
+    fun resetConnectedSince() = Unit
 }

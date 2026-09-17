@@ -88,16 +88,15 @@ class HomeScreenViewModel(
                         VpnStatus.Connected -> it.copy(
                             isVpnConnected = true,
                             isVpnLoading = false,
-                            connectedSinceEpochMs = it.connectedSinceEpochMs
-                                ?: vpnManager.connectedSinceEpochMs()
+                            // Always re-read store so server-switch clears are not stuck
+                            // behind a stale in-memory timestamp.
+                            connectedSinceEpochMs = vpnManager.connectedSinceEpochMs()
                                 ?: System.currentTimeMillis(),
                         )
                         VpnStatus.Connecting -> it.copy(
                             isVpnConnected = false,
                             isVpnLoading = true,
-                            // Keep timer if tunnel is still up from a prior session.
-                            connectedSinceEpochMs = it.connectedSinceEpochMs
-                                ?: vpnManager.connectedSinceEpochMs(),
+                            connectedSinceEpochMs = vpnManager.connectedSinceEpochMs(),
                         )
                         VpnStatus.Reconnecting -> it.copy(
                             // Show as connecting spinner, not "Connected" + spinner.
@@ -260,6 +259,7 @@ class HomeScreenViewModel(
             VpnStatus.Connecting,
             VpnStatus.Reconnecting -> viewModelScope.launch {
                 // Switching servers must zero the uptime counter immediately.
+                vpnManager.resetConnectedSince()
                 _state.update { it.copy(isVpnLoading = true, connectedSinceEpochMs = null) }
                 val active = locationsRepository.getActiveLocation()
                 if (active == null || !active.location.isComplete()) {

@@ -36,13 +36,16 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
@@ -94,6 +97,7 @@ fun LocationRow(
     )
     val borderWidth = if (isSelected) 2.dp else 1.dp
     val textColor = MaterialTheme.colorScheme.onSurface
+    val darkTheme = MaterialTheme.colorScheme.background.luminance() < 0.5f
 
     val metadata = location.metadata
     val rawName = metadata?.name?.takeIf { it.isNotBlank() } ?: location.fullName
@@ -137,13 +141,13 @@ fun LocationRow(
         }
 
         Column(
-            modifier = Modifier.weight(1f)
+            modifier = Modifier.weight(1f, fill = true)
         ) {
             AutoShrinkText(
                 text = cleanName,
                 color = textColor,
                 maxFontSize = nameFontSize,
-                minFontSize = 9.sp,
+                minFontSize = 8.sp,
                 fontWeight = FontWeight.Medium,
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -151,7 +155,11 @@ fun LocationRow(
             val protocolTags = metadata?.protocolTags().orEmpty()
             if (protocolTags.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(4.dp))
-                ProtocolTagRow(tags = protocolTags, maxFontSize = tagFontSize)
+                ProtocolTagRow(
+                    tags = protocolTags,
+                    maxFontSize = tagFontSize,
+                    darkTheme = darkTheme,
+                )
             } else if (!description.isNullOrBlank()) {
                 Text(
                     text = description,
@@ -271,12 +279,14 @@ private fun AutoShrinkText(
     BoxWithConstraints(modifier = modifier) {
         val density = LocalDensity.current
         val measurer = rememberTextMeasurer()
-        val maxWidthPx = with(density) { maxWidth.toPx() }
-        val fitted = remember(text, maxWidthPx, maxFontSize, minFontSize, fontWeight) {
+        val maxWidthPx = with(density) { maxWidth.toPx() }.coerceAtLeast(1f)
+        // Leave a few px so glyphs are not clipped at the edge.
+        val budget = (maxWidthPx - 4f).coerceAtLeast(1f)
+        val fitted = remember(text, budget, maxFontSize, minFontSize, fontWeight) {
             var lo = minFontSize.value
             var hi = maxFontSize.value
             var best = minFontSize
-            repeat(14) {
+            repeat(16) {
                 val mid = (lo + hi) / 2f
                 val result = measurer.measure(
                     text = AnnotatedString(text),
@@ -284,7 +294,7 @@ private fun AutoShrinkText(
                     maxLines = 1,
                     softWrap = false,
                 )
-                if (result.size.width <= maxWidthPx) {
+                if (result.size.width <= budget) {
                     best = mid.sp
                     lo = mid
                 } else {
@@ -293,14 +303,21 @@ private fun AutoShrinkText(
             }
             best
         }
+        var liveSize by remember(text, fitted) { mutableStateOf(fitted) }
         Text(
             text = text,
             color = color,
-            fontSize = fitted,
+            fontSize = liveSize,
             fontWeight = fontWeight,
             maxLines = 1,
             softWrap = false,
             overflow = TextOverflow.Clip,
+            onTextLayout = { layout ->
+                if (layout.hasVisualOverflow && liveSize.value > minFontSize.value + 0.25f) {
+                    liveSize = (liveSize.value - 0.5f).coerceAtLeast(minFontSize.value).sp
+                }
+            },
+            modifier = Modifier.fillMaxWidth(),
         )
     }
 }
@@ -309,22 +326,25 @@ private fun AutoShrinkText(
 private fun ProtocolTagRow(
     tags: List<String>,
     maxFontSize: TextUnit = 9.sp,
+    darkTheme: Boolean,
 ) {
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
         val density = LocalDensity.current
         val measurer = rememberTextMeasurer()
-        val maxWidthPx = with(density) { maxWidth.toPx() }
-        val displayTags = tags.take(6)
-        val fitted = remember(displayTags, maxWidthPx, maxFontSize) {
-            val minSp = 6f
-            var lo = minSp
-            var hi = maxFontSize.value
-            var best = minSp.sp
-            fun fits(sizeSp: Float): Boolean {
+        val maxWidthPx = with(density) { maxWidth.toPx() }.coerceAtLeast(1f)
+        val budget = (maxWidthPx - 6f).coerceAtLeast(1f)
+        val candidates = tags.take(6)
+
+        data class Fit(val tags: List<String>, val size: TextUnit, val hPadDp: Float)
+
+        val fit = remember(candidates, budget, maxFontSize, darkTheme) {
+            val dropOrder = listOf("JSON", "VISION", "NONE", "UDP", "HTTP", "H2")
+            var working = candidates.toMutableList()
+            fun measure(sizeSp: Float, hPadDp: Float, list: List<String>): Float {
                 var total = 0f
                 val gapPx = with(density) { 4.dp.toPx() }
-                val hPadPx = with(density) { 10.dp.toPx() } // 5dp * 2
-                displayTags.forEachIndexed { index, tag ->
+                val hPadPx = with(density) { (hPadDp * 2).dp.toPx() }
+                list.forEachIndexed { index, tag ->
                     val result = measurer.measure(
                         text = AnnotatedString(tag),
                         style = TextStyle(fontSize = sizeSp.sp, fontWeight = FontWeight.SemiBold),
@@ -334,30 +354,46 @@ private fun ProtocolTagRow(
                     total += result.size.width + hPadPx
                     if (index > 0) total += gapPx
                 }
-                return total <= maxWidthPx
+                return total
             }
-            repeat(14) {
-                val mid = (lo + hi) / 2f
-                if (fits(mid)) {
-                    best = mid.sp
-                    lo = mid
-                } else {
-                    hi = mid
+            fun bestFor(list: List<String>): Fit? {
+                for (hPad in listOf(5f, 4f, 3f)) {
+                    var lo = 6f
+                    var hi = maxFontSize.value
+                    var best: TextUnit? = null
+                    repeat(14) {
+                        val mid = (lo + hi) / 2f
+                        if (measure(mid, hPad, list) <= budget) {
+                            best = mid.sp
+                            lo = mid
+                        } else {
+                            hi = mid
+                        }
+                    }
+                    if (best != null) return Fit(list, best!!, hPad)
                 }
+                return null
             }
-            best
+            var result = bestFor(working)
+            while (result == null && working.size > 1) {
+                val drop = dropOrder.firstOrNull { it in working } ?: working.last()
+                working.remove(drop)
+                result = bestFor(working)
+            }
+            result ?: Fit(working.take(1), 6.sp, 3f)
         }
+
         Row(
             horizontalArrangement = Arrangement.spacedBy(4.dp),
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            displayTags.forEach { tag ->
-                val colors = protocolTagColors(tag)
+            fit.tags.forEach { tag ->
+                val colors = protocolTagColors(tag, darkTheme)
                 Text(
                     text = tag,
                     color = colors.first,
-                    fontSize = fitted,
+                    fontSize = fit.size,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     softWrap = false,
@@ -365,7 +401,7 @@ private fun ProtocolTagRow(
                     modifier = Modifier
                         .clip(RoundedCornerShape(4.dp))
                         .background(colors.second)
-                        .padding(horizontal = 5.dp, vertical = 2.dp),
+                        .padding(horizontal = fit.hPadDp.dp, vertical = 2.dp),
                 )
             }
         }
@@ -373,42 +409,50 @@ private fun ProtocolTagRow(
 }
 
 /**
- * Soft unique pastels: protocol / transport / security / JSON — no shared hues.
- * Pair = (text, background).
+ * Soft unique pastels per protocol/transport/security/JSON.
+ * Light theme: muted text on pastel bg. Dark theme: pastel text on deep muted bg.
  */
-private fun protocolTagColors(tag: String): Pair<Color, Color> {
+private fun protocolTagColors(tag: String, darkTheme: Boolean): Pair<Color, Color> {
     val key = tag.trim().uppercase()
-    return when (key) {
-        // Protocols
-        "VLESS" -> Color(0xFF5A6FA8) to Color(0xFFE8ECF8)          // periwinkle
-        "VMESS" -> Color(0xFF6B7DB5) to Color(0xFFEEF0FA)
-        "TROJAN" -> Color(0xFF8B6FA8) to Color(0xFFF3EAF8)         // lilac
-        "SS", "SHADOWSOCKS" -> Color(0xFFB07A5A) to Color(0xFFF8EDE4) // peach
-        "HYSTERIA2", "HYSTERIA", "HY2" -> Color(0xFF4A9A8A) to Color(0xFFE4F5F1) // mint
-        "TUIC" -> Color(0xFF5A9A6E) to Color(0xFFE6F5EB)
-        // Transports — each distinct from protocols
-        "TCP" -> Color(0xFF7A8494) to Color(0xFFEEF1F4)            // cool gray
-        "XHTTP" -> Color(0xFFA89050) to Color(0xFFF7F1DE)          // butter
-        "WS", "WEBSOCKET" -> Color(0xFF4A9AB8) to Color(0xFFE3F3F8) // sky
-        "GRPC" -> Color(0xFF7A9A5A) to Color(0xFFEEF5E4)           // sage
-        "H2", "HTTP", "HTTPUPGRADE" -> Color(0xFF6A8A9A) to Color(0xFFE8F0F4)
-        "UDP" -> Color(0xFF8A7A6A) to Color(0xFFF4EEE8)
-        // Security
-        "NONE" -> Color(0xFFB07088) to Color(0xFFF8E8EE)           // rose
-        "REALITY" -> Color(0xFF6A70B0) to Color(0xFFEAEBFA)        // soft indigo
-        "TLS" -> Color(0xFF4A9A78) to Color(0xFFE4F6EE)            // seafoam
-        "VISION" -> Color(0xFF5A8A9A) to Color(0xFFE6F2F6)
-        // Format
-        "JSON" -> Color(0xFFB87868) to Color(0xFFF8EBE6)           // coral
-        else -> Color(0xFF7A8490) to Color(0xFFEFF1F3)
+    // textLight, bgLight, textDark, bgDark
+    val palette = when (key) {
+        "VLESS" -> Quad(0xFF5A6FA8, 0xFFE8ECF8, 0xFFB8C6F0, 0xFF2A3148)
+        "VMESS" -> Quad(0xFF6B7DB5, 0xFFEEF0FA, 0xFFC0CAF0, 0xFF2C334A)
+        "TROJAN" -> Quad(0xFF8B6FA8, 0xFFF3EAF8, 0xFFD2B8E8, 0xFF352A42)
+        "SS", "SHADOWSOCKS" -> Quad(0xFFB07A5A, 0xFFF8EDE4, 0xFFE8C4A8, 0xFF3A2E28)
+        "HYSTERIA2", "HYSTERIA", "HY2" -> Quad(0xFF4A9A8A, 0xFFE4F5F1, 0xFF9AD8C8, 0xFF243832)
+        "TUIC" -> Quad(0xFF5A9A6E, 0xFFE6F5EB, 0xFFA8D8B8, 0xFF283828)
+        "TCP" -> Quad(0xFF7A8494, 0xFFEEF1F4, 0xFFB0B8C4, 0xFF2C3038)
+        "XHTTP" -> Quad(0xFFA89050, 0xFFF7F1DE, 0xFFE0D0A0, 0xFF383228)
+        "WS", "WEBSOCKET" -> Quad(0xFF4A9AB8, 0xFFE3F3F8, 0xFF9AD0E0, 0xFF243840)
+        "GRPC" -> Quad(0xFF7A9A5A, 0xFFEEF5E4, 0xFFC0D8A0, 0xFF303828)
+        "H2", "HTTP", "HTTPUPGRADE" -> Quad(0xFF6A8A9A, 0xFFE8F0F4, 0xFFA8C4D0, 0xFF283038)
+        "UDP" -> Quad(0xFF8A7A6A, 0xFFF4EEE8, 0xFFD0C0B0, 0xFF342E28)
+        "NONE" -> Quad(0xFFB07088, 0xFFF8E8EE, 0xFFE8B0C0, 0xFF3A2830)
+        "REALITY" -> Quad(0xFF6A70B0, 0xFFEAEBFA, 0xFFB8BCE8, 0xFF2A2C48)
+        "TLS" -> Quad(0xFF4A9A78, 0xFFE4F6EE, 0xFF9AD8B8, 0xFF243830)
+        "VISION" -> Quad(0xFF5A8A9A, 0xFFE6F2F6, 0xFFA8CCD8, 0xFF283438)
+        "JSON" -> Quad(0xFFB87868, 0xFFF8EBE6, 0xFFE8B8A8, 0xFF3A2C28)
+        else -> Quad(0xFF7A8490, 0xFFEFF1F3, 0xFFB0B8C0, 0xFF2C3034)
+    }
+    return if (darkTheme) {
+        Color(palette.textDark) to Color(palette.bgDark)
+    } else {
+        Color(palette.textLight) to Color(palette.bgLight)
     }
 }
+
+private data class Quad(
+    val textLight: Long,
+    val bgLight: Long,
+    val textDark: Long,
+    val bgDark: Long,
+)
 
 private fun quotaText(used: String?, available: String?): String? {
     val usedRaw = used?.trim()?.takeIf { it.isNotBlank() } ?: return available?.let {
         org.olcbox.app.i18n.S.localizeDataUnit(it)
     }
-    // "358mb/100gb" or "549.81GB"
     val usedPart = usedRaw.split('/', limit = 2).first().trim()
     val usedLabel = org.olcbox.app.i18n.S.localizeDataUnit(usedPart)
     val avail = available?.trim()?.takeIf { it.isNotBlank() }

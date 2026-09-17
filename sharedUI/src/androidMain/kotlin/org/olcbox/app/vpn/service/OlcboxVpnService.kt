@@ -33,7 +33,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
-import kotlinx.coroutines.suspendCancellableCoroutine
 import mobile.Mobile
 import mobile.Runtime as OlcRtcRuntime
 import mobile.SocketProtector
@@ -57,7 +56,6 @@ import org.olcbox.app.vpn.UpstreamCandidate
 import org.olcbox.app.vpn.UpstreamNetworkSelector
 import org.olcbox.app.vpn.UpstreamTransport
 import org.olcbox.app.vpn.VpnStatus
-import kotlin.coroutines.resume
 import org.olcbox.app.vpn.data.KEY_ANDROID_CONNECTION_MODE
 import org.olcbox.app.vpn.data.KEY_ANDROID_SPLIT_TUNNEL_BYPASS_APPS
 import org.olcbox.app.vpn.data.KEY_ANDROID_SPLIT_TUNNEL_MODE
@@ -93,6 +91,8 @@ class OlcboxVpnService : VpnService() {
     @Volatile private var mihomoEngineTouched = false
     /** Cleared on olcRTC start; kept only to tear down a leftover `:route` from older builds. */
     @Volatile private var olcRtcRoutingActive = false
+    @Volatile private var olcRtcFetchBridge: org.olcbox.app.vpn.OlcRtcFetchSocksBridge? = null
+    @Volatile private var uptimeLocationKey: String? = null
 
     private fun rtc(): OlcRtcRuntime {
         val existing = olcRtcRuntime
@@ -484,6 +484,21 @@ class OlcboxVpnService : VpnService() {
                     }
                     rememberConnectedServer(entry)
 
+                    // Reset uptime whenever the selected location changes (incl. engine switch
+                    // that kills :vpn — isRestart may be false after process recycle).
+                    val locationKey = entry.storageId.ifBlank {
+                        listOfNotNull(entry.mihomoProfileId, entry.mihomoProxyName, entry.location.id)
+                            .joinToString("|")
+                    }
+                    if (!isMigration && locationKey != uptimeLocationKey) {
+                        org.olcbox.app.vpn.VpnConnectedSinceStore.clear(applicationContext)
+                        uptimeLocationKey = locationKey
+                        addLog("Uptime reset for location switch → $locationKey")
+                    } else if (!isMigration && isRestart) {
+                        org.olcbox.app.vpn.VpnConnectedSinceStore.clear(applicationContext)
+                        addLog("Uptime reset for VPN restart")
+                    }
+
                     if (entry.isMihomo()) {
                         startMihomoFullTunnel(entry, requestedGeneration, isMigration, isRestart)
                         return@withLock
@@ -546,6 +561,7 @@ class OlcboxVpnService : VpnService() {
         updateNotification(vpnNotifyConnecting())
         // Tear down hev/olcRTC sockets, but do NOT bind this process to upstream —
         // FlClash notes that bindProcessToNetwork breaks ordinary Mihomo nodes.
+        stopOlcRtcFetchBridge()
         stopOlcRtcRoutingRouter()
         stopAuthenticatedSocksProxy()
         stopTun2socks()
@@ -823,12 +839,8 @@ class OlcboxVpnService : VpnService() {
         if (requestedGeneration != generation) return
 
         if (connectionMode == AndroidConnectionMode.Proxy) {
-//            if (!startAuthenticatedSocksProxy()) {
-//                stopTransportProcesses(closeTun = true)
-//                return
-//            }
-            if (!startOlcRtcFetchRouter(upstream)) {
-                addLog("olcRTC Clash fetch router failed — subscription refresh may stall")
+            if (!startOlcRtcFetchBridge()) {
+                addLog("olcRTC fetch SOCKS bridge failed — subscription refresh may stall")
             }
             setStatus(VpnStatus.Connected)
             resetRecoveryState()
@@ -842,7 +854,7 @@ class OlcboxVpnService : VpnService() {
         coroutineContext.ensureActive()
 
         // TUN still goes straight to Mobile SOCKS (server-side whitelist).
-        // Clash on :7890 is only for UI subscription/update fetch (no SOCKS auth).
+        // Fetch bridge on :7890 is only for UI subscription/update (OkHttp, no SOCKS auth).
         val pfd = establishSystemVpnTunnel()
         if (pfd == null) {
             stopMobileAndWait()
@@ -858,8 +870,8 @@ class OlcboxVpnService : VpnService() {
         coroutineContext.ensureActive()
         if (requestedGeneration != generation) return
 
-        if (!startOlcRtcFetchRouter(upstream)) {
-            addLog("olcRTC Clash fetch router failed — subscription refresh may stall")
+        if (!startOlcRtcFetchBridge()) {
+            addLog("olcRTC fetch SOCKS bridge failed — subscription refresh may stall")
         }
 
         setStatus(VpnStatus.Connected)
@@ -870,43 +882,53 @@ class OlcboxVpnService : VpnService() {
     }
 
     /**
-     * Starts Clash in `:route` with a SOCKS5 outbound to local Mobile (auth),
-     * exposing unauthenticated mixed-port 7890 for OkHttp subscription/update fetches.
+     * Unauthenticated SOCKS on 7890 → authenticated Mobile SOCKS.
+     * Replaces the flaky Clash `:route` process (ECONNREFUSED under whitelist).
      */
-    private suspend fun startOlcRtcFetchRouter(upstream: Network): Boolean {
+    private fun startOlcRtcFetchBridge(): Boolean {
+        stopOlcRtcFetchBridge()
         stopOlcRtcRoutingRouter()
-        val yaml = runCatching {
-            OlcRtcRoutingConfig.build(
-                context = applicationContext,
-                olcRtcSocksPort = socksListenPort,
-                sourceYaml = OlcRtcRoutingConfig.findSourceProfile(applicationContext)?.readText(),
-                socksUsername = socksUsername,
-                socksPassword = socksPassword,
-            )
-        }.onFailure {
-            addLog("olcRTC fetch yaml build failed: ${it.message}")
-        }.getOrNull() ?: return false
-
-        val ok = withTimeoutOrNull(20_000L) {
-            suspendCancellableCoroutine { cont ->
-                OlcRtcRoutingService.start(
-                    context = applicationContext,
-                    olcRtcSocksPort = socksListenPort,
-                    profilePath = yaml.absolutePath,
-                    networkHandle = upstream.networkHandle,
-                    socksUsername = socksUsername,
-                    socksPassword = socksPassword,
-                    onResult = { result ->
-                        if (cont.isActive) cont.resume(result)
-                    },
-                )
+        // Free mixed-port if a leftover Clash still holds it.
+        runCatching {
+            Socket().use { s ->
+                s.connect(InetSocketAddress("127.0.0.1", OlcRtcRoutingConfig.MIXED_PORT), 150)
             }
-        } ?: false
-        olcRtcRoutingActive = ok
-        if (ok) {
-            addLog("olcRTC fetch router ready on :${OlcRtcRoutingConfig.MIXED_PORT}")
+            addLog("Port ${OlcRtcRoutingConfig.MIXED_PORT} still open — waiting briefly")
+            Thread.sleep(400)
         }
-        return ok
+        return try {
+            val bridge = org.olcbox.app.vpn.OlcRtcFetchSocksBridge(
+                listenPort = OlcRtcRoutingConfig.MIXED_PORT,
+                backendHost = socksConnectHost(),
+                backendPort = socksListenPort,
+                username = socksUsername,
+                password = socksPassword,
+                log = { addLog(it) },
+            )
+            bridge.start()
+            // Confirm accept is live.
+            val ready = runCatching {
+                Socket().use { s ->
+                    s.connect(InetSocketAddress("127.0.0.1", OlcRtcRoutingConfig.MIXED_PORT), 800)
+                }
+                true
+            }.getOrDefault(false)
+            if (!ready) {
+                bridge.stop()
+                addLog("olcRTC fetch bridge port not accepting")
+                return false
+            }
+            olcRtcFetchBridge = bridge
+            true
+        } catch (e: Exception) {
+            addLog("olcRTC fetch bridge start failed: ${e.message}")
+            false
+        }
+    }
+
+    private fun stopOlcRtcFetchBridge() {
+        olcRtcFetchBridge?.stop()
+        olcRtcFetchBridge = null
     }
 
     private fun stopOlcRtcRoutingRouter() {
@@ -1354,6 +1376,7 @@ class OlcboxVpnService : VpnService() {
 
         // Sync tear-down first: MIUI keeps the shade VPN tile until the iface is gone,
         // and waiting only inside a coroutine made the first STOP look like a no-op.
+        runCatching { stopOlcRtcFetchBridge() }
         runCatching { stopOlcRtcRoutingRouter() }
         runCatching { stopMihomoTun() }
         runCatching { stopVisibleVpnProcessesBlocking() }
@@ -1448,6 +1471,7 @@ class OlcboxVpnService : VpnService() {
     ) {
         val tunThread = tun2socksThread
         stopAuthenticatedSocksProxy()
+        stopOlcRtcFetchBridge()
         stopOlcRtcRoutingRouter()
         stopMihomoTun()
         if (stopMobileBeforeTun) {

@@ -564,8 +564,8 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
             return null
         }
 
-        // Both engines expose unauthenticated Clash mixed-port 7890 for UI fetches.
-        // olcRTC: :route Clash → authenticated Mobile SOCKS; OkHttp cannot do SOCKS5 auth.
+        // Both engines expose unauthenticated SOCKS/mixed on 7890 for UI fetches.
+        // Mihomo: Clash mixed-port. olcRTC: OlcRtcFetchSocksBridge → Mobile SOCKS.
         return SubscriptionFetchProxy(
             host = "127.0.0.1",
             port = 7890,
@@ -584,6 +584,10 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
             return null
         }
         return VpnConnectedSinceStore.read(appContext)
+    }
+
+    override fun resetConnectedSince() {
+        VpnConnectedSinceStore.clear(appContext)
     }
 
     /** Re-sync Connected after UI process death while the tunnel stayed up. */
