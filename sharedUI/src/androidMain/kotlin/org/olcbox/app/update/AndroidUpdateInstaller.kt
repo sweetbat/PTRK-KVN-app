@@ -103,10 +103,12 @@ class AndroidUpdateInstaller(
         return try {
             val proxy = proxyProvider()
             Result.success(withProxyAuthentication(proxy) {
-                val connectionProxy = proxy?.let {
-                    val type = if (it.useHttpProxy) Proxy.Type.HTTP else Proxy.Type.SOCKS
-                    Proxy(type, InetSocketAddress(it.host, it.port))
-                } ?: Proxy.NO_PROXY
+                val connectionProxy = if (proxy != null && proxy.usesLocalProxy) {
+                    val type = if (proxy.useHttpProxy) Proxy.Type.HTTP else Proxy.Type.SOCKS
+                    Proxy(type, InetSocketAddress(proxy.host, proxy.port))
+                } else {
+                    Proxy.NO_PROXY
+                }
                 downloads.download(asset, connectionProxy) { reportProgress(it, onProgress) }
             })
         } catch (error: CancellationException) {

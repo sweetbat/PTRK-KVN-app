@@ -331,7 +331,7 @@ private fun buildSubscriptionOkHttpClient(
         // HTTP/2 multiplexing is fragile over olcRTC; stick to HTTP/1.1 via the bridge.
         .protocols(listOf(Protocol.HTTP_1_1))
 
-    if (subscriptionProxy != null) {
+    if (subscriptionProxy != null && subscriptionProxy.usesLocalProxy) {
         val proxyType = if (subscriptionProxy.useHttpProxy) Proxy.Type.HTTP else Proxy.Type.SOCKS
         builder.proxy(
             Proxy(
@@ -343,6 +343,8 @@ private fun buildSubscriptionOkHttpClient(
             "SubDownload",
             "OkHttp via $proxyType ${subscriptionProxy.host}:${subscriptionProxy.port}",
         )
+    } else if (subscriptionProxy != null) {
+        android.util.Log.i("SubDownload", "OkHttp via TUN/default route (no local proxy)")
     }
 
     if (pinSubscriptionHeaders) {
@@ -385,7 +387,10 @@ internal actual suspend fun <T> withProxyAuthentication(
     subscriptionProxy: SubscriptionFetchProxy?,
     block: suspend () -> T
 ): T {
-    if (subscriptionProxy == null || subscriptionProxy.username.isBlank()) {
+    if (subscriptionProxy == null ||
+        !subscriptionProxy.usesLocalProxy ||
+        subscriptionProxy.username.isBlank()
+    ) {
         return block()
     }
 

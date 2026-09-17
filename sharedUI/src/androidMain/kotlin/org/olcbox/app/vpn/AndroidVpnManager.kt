@@ -566,12 +566,30 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
         }
 
         // Mihomo: Clash mixed-port (app excluded from TUN).
-        // olcRTC: same Clash mixed-port on 7890 (or HTTP CONNECT bridge fallback).
-        return SubscriptionFetchProxy(
-            host = "127.0.0.1",
-            port = 7890,
-            useHttpProxy = true,
-        )
+        // olcRTC TUN: app stays in TUN — OkHttp goes hev→Mobile (no :7890).
+        //   Clash :route timed out; DIY bridge starved WebRTC after sub/update.
+        // olcRTC Proxy: HTTP CONNECT bridge on 7890 (no hev to starve).
+        return when (readActiveEngine()) {
+            "olcrtc" -> {
+                if (_connectionMode.value == AndroidConnectionMode.Proxy) {
+                    SubscriptionFetchProxy(
+                        host = "127.0.0.1",
+                        port = 7890,
+                        useHttpProxy = true,
+                    )
+                } else {
+                    SubscriptionFetchProxy(
+                        host = "tun",
+                        port = -1,
+                    )
+                }
+            }
+            else -> SubscriptionFetchProxy(
+                host = "127.0.0.1",
+                port = 7890,
+                useHttpProxy = true,
+            )
+        }
     }
 
     override fun connectedSinceEpochMs(): Long? {

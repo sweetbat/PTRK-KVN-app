@@ -75,4 +75,7 @@ data class SubscriptionFetchProxy(
     val password: String = "",
     /** Prefer HTTP CONNECT on Android so DNS is done inside the tunnel (not locally). */
     val useHttpProxy: Boolean = false,
-)
+) {
+    /** Local HTTP/SOCKS proxy. port <= 0 means “via TUN / default route”, still VPN-constrained. */
+    val usesLocalProxy: Boolean get() = port > 0 && host.isNotBlank()
+}
