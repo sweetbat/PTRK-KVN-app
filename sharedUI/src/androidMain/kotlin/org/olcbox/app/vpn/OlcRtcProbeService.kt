@@ -54,23 +54,31 @@ class OlcRtcProbeService : Service() {
         val deviceId = intent.getStringExtra(EXTRA_DEVICE).orEmpty()
         val vp8Fps = intent.getIntExtra(EXTRA_VP8_FPS, LocationConfig.DEFAULT_VP8_FPS)
         val vp8Batch = intent.getIntExtra(EXTRA_VP8_BATCH, LocationConfig.DEFAULT_VP8_BATCH)
+        val dnsServer = intent.getStringExtra(EXTRA_DNS)
+            ?.takeIf { it.isNotBlank() }
+            ?: YANDEX_DNS
 
         scope.launch {
             val delayMs = runCatching {
                 bindProbeToUpstream()
                 val port = ServerSocket(0).use { it.localPort }
                 val mobile = Mobile.new_()
+                // Never use 1.1.1.1 / 8.8.8.8 — TSPU/MTS whitelist hijacks them.
+                runCatching { mobile.setDNS(dnsServer) }
+                    .onFailure { Log.w(TAG, "setDNS($dnsServer) failed: ${it.message}") }
+                Log.i(TAG, "probe dns=$dnsServer action=$action room=$roomId")
                 when (action) {
                     ACTION_CHECK -> mobile.check(
                         provider, transport, roomId, deviceId, key,
-                        port.toLong(), 12_000L, vp8Fps.toLong(), vp8Batch.toLong()
+                        port.toLong(), 15_000L, vp8Fps.toLong(), vp8Batch.toLong()
                     )
                     else -> {
-                        // Prefer HTTP generate_204 — TLS to gstatic often fails on MTS
-                        // while WebRTC signalling still works.
+                        // Latency URL is fetched *through* the temporary olcRTC path
+                        // after signalling succeeds — prefer RU-reachable hosts for the
+                        // bootstrap DNS step; generate_204 is fine once tunnel is up.
                         val urls = listOf(
+                            "http://ya.ru",
                             "http://connectivitycheck.gstatic.com/generate_204",
-                            "http://www.gstatic.com/generate_204",
                             "https://www.gstatic.com/generate_204",
                         )
                         var last: Long? = null
@@ -78,7 +86,7 @@ class OlcRtcProbeService : Service() {
                             last = runCatching {
                                 mobile.ping(
                                     provider, transport, roomId, deviceId, key,
-                                    port.toLong(), 12_000L, url,
+                                    port.toLong(), 15_000L, url,
                                     vp8Fps.toLong(), vp8Batch.toLong()
                                 )
                             }.onFailure {
@@ -108,9 +116,8 @@ class OlcRtcProbeService : Service() {
     }
 
     /**
-     * Bind `:olcrtc` off the VPN TUN. Do NOT require a smoke-test to 1.1.1.1 —
-     * on MTS that probe often fails while WebRTC still works, and rejecting the
-     * only usable cellular network left the process on the VPN (ping=offline).
+     * Bind `:olcrtc` off the VPN TUN so whitelist mode does not black-hole
+     * WebRTC signalling. Prefer cellular on MTS.
      */
     private fun bindProbeToUpstream() {
         val cm = getSystemService(ConnectivityManager::class.java) ?: return
@@ -124,7 +131,6 @@ class OlcRtcProbeService : Service() {
         fun score(network: Network): Int {
             val caps = cm.getNetworkCapabilities(network) ?: return 0
             var s = 1
-            // Prefer cellular for MTS whitelist (Wi‑Fi was ranked higher and wrong).
             if (caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) s += 8
             if (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) s += 3
             if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) s += 2
@@ -173,6 +179,8 @@ class OlcRtcProbeService : Service() {
 
     companion object {
         private const val TAG = "OlcRtcProbe"
+        /** Yandex DNS — works on RU whitelist; Cloudflare/Google do not. */
+        const val YANDEX_DNS = "77.88.8.8:53"
         const val ACTION_PING = "ping"
         const val ACTION_CHECK = "check"
         const val EXTRA_ACTION = "action"
@@ -182,6 +190,7 @@ class OlcRtcProbeService : Service() {
         const val EXTRA_ROOM = "room"
         const val EXTRA_KEY = "key"
         const val EXTRA_DEVICE = "device"
+        const val EXTRA_DNS = "dns"
         const val EXTRA_VP8_FPS = "vp8_fps"
         const val EXTRA_VP8_BATCH = "vp8_batch"
         const val EXTRA_RESULT_MS = "result_ms"
@@ -193,7 +202,7 @@ class OlcRtcProbeService : Service() {
             locationConfig: LocationConfig,
             deviceId: String,
             action: String = ACTION_PING,
-            timeoutMs: Long = 20_000L,
+            timeoutMs: Long = 22_000L,
         ): Long? {
             val config = locationConfig.normalized()
             if (!config.isComplete()) return null
@@ -207,6 +216,9 @@ class OlcRtcProbeService : Service() {
                 }
             }
 
+            val dns = config.dnsServer.trim().takeIf { it.isNotBlank() && !RuSafeDns.isHijacked(it) }
+                ?: YANDEX_DNS
+
             val intent = Intent(context, OlcRtcProbeService::class.java).apply {
                 putExtra(EXTRA_RECEIVER, receiver)
                 putExtra(EXTRA_ACTION, action)
@@ -215,6 +227,7 @@ class OlcRtcProbeService : Service() {
                 putExtra(EXTRA_ROOM, config.id)
                 putExtra(EXTRA_KEY, config.key)
                 putExtra(EXTRA_DEVICE, deviceId)
+                putExtra(EXTRA_DNS, dns)
                 putExtra(EXTRA_VP8_FPS, config.vp8Fps)
                 putExtra(EXTRA_VP8_BATCH, config.vp8Batch)
             }

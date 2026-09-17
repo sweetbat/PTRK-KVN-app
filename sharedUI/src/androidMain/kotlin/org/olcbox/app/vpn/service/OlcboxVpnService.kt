@@ -1837,7 +1837,7 @@ class OlcboxVpnService : VpnService() {
     }
 
     private fun resolveOlcRtcDnsServer(configuredDnsServer: String): String {
-        if (configuredDnsServer.isNotBlank()) {
+        if (configuredDnsServer.isNotBlank() && !RuSafeDns.isHijacked(configuredDnsServer)) {
             addLog("Using configured DNS server $configuredDnsServer for olcRTC signaling")
             return configuredDnsServer
         }
@@ -1850,10 +1850,11 @@ class OlcboxVpnService : VpnService() {
             ?.sortedBy { it.address.size }
             ?.mapNotNull { it.hostAddress }
             ?.map(::dnsEndpoint)
+            ?.filterNot { RuSafeDns.isHijacked(it) }
             ?.firstOrNull()
 
         val selectedDnsServer = upstreamDnsServer ?: DEFAULT_OLCRTC_DNS_SERVER
-        val source = if (upstreamDnsServer != null) "upstream" else "fallback"
+        val source = if (upstreamDnsServer != null) "upstream" else "yandex-fallback"
         addLog("Using $source DNS server $selectedDnsServer for olcRTC signaling")
         return selectedDnsServer
     }
@@ -2302,7 +2303,9 @@ class OlcboxVpnService : VpnService() {
         private const val IPV4_PREFIX_LENGTH = 24
         private const val IPV6_PREFIX_LENGTH = 128
         private const val MIHOMO_MIXED_PORT = 7890
-        private const val DEFAULT_OLCRTC_DNS_SERVER = "1.1.1.1:53"
+        // Yandex DNS — Cloudflare/Google are hijacked on RU whitelist (TSPU/MTS).
+        // Note: MAPDNS_ADDRESS below is hev's *fake* DNS sink inside the TUN, not Cloudflare.
+        private const val DEFAULT_OLCRTC_DNS_SERVER = "77.88.8.8:53"
         private const val MAPDNS_ADDRESS = "1.1.1.1"
         private const val MAPDNS_NETWORK = "100.64.0.0"
         private const val MAPDNS_NETMASK = "255.192.0.0"

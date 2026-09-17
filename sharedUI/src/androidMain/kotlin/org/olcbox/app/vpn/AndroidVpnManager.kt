@@ -565,11 +565,12 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
             return null
         }
 
-        // Both engines expose unauthenticated SOCKS/mixed on 7890 for UI fetches.
-        // Mihomo: Clash mixed-port. olcRTC: OlcRtcFetchSocksBridge → Mobile SOCKS.
+        // HTTP CONNECT: OkHttp must not resolve DNS locally (app is excluded from TUN).
+        // Mihomo mixed-port and olcRTC fetch bridge both accept HTTP CONNECT on 7890.
         return SubscriptionFetchProxy(
             host = "127.0.0.1",
             port = 7890,
+            useHttpProxy = true,
         )
     }
 

@@ -1,19 +1,27 @@
 package org.olcbox.app.vpn
 
+import java.io.BufferedInputStream
+import java.io.BufferedOutputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.EOFException
 import java.io.IOException
+import java.io.InputStream
+import java.io.OutputStream
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import kotlin.concurrent.thread
 
 /**
- * Local SOCKS5 front for UI OkHttp (no auth) → olcRTC Mobile SOCKS (user/pass).
+ * Local HTTP CONNECT front (no auth) → olcRTC Mobile SOCKS5 (user/pass).
  *
- * OkHttp cannot authenticate SOCKS5 reliably; Clash `:route` on 7890 was flaky
- * (ECONNREFUSED). This bridge runs in `:vpn` next to Mobile.
+ * Why HTTP not SOCKS for OkHttp: Java [Proxy.Type.SOCKS] resolves DNS locally first.
+ * The app is excluded from the VPN TUN, so local DNS on MTS whitelist cannot resolve
+ * GitHub / subscription hosts. HTTP CONNECT sends the hostname to us unresolved;
+ * Mobile resolves it inside the tunnel.
+ *
+ * Port 7890 matches Mihomo mixed-port so UI always uses the same fetch proxy.
  */
 class OlcRtcFetchSocksBridge(
     private val listenPort: Int,
@@ -40,10 +48,10 @@ class OlcRtcFetchSocksBridge(
             bind(InetSocketAddress("127.0.0.1", listenPort))
         }
         serverSocket = server
-        acceptThread = thread(name = "OlcRtcFetchSocks", isDaemon = true) {
+        acceptThread = thread(name = "OlcRtcFetchHttp", isDaemon = true) {
             acceptLoop(server)
         }
-        log("olcRTC fetch SOCKS bridge on 127.0.0.1:$listenPort → $backendHost:$backendPort")
+        log("olcRTC fetch HTTP CONNECT on 127.0.0.1:$listenPort → SOCKS $backendHost:$backendPort")
     }
 
     fun stop() {
@@ -61,18 +69,16 @@ class OlcRtcFetchSocksBridge(
     private fun acceptLoop(server: ServerSocket) {
         while (!stopped) {
             val client = runCatching { server.accept() }
-                .onFailure { if (!stopped) log("fetch SOCKS accept failed: ${it.message}") }
+                .onFailure { if (!stopped) log("fetch accept failed: ${it.message}") }
                 .getOrNull() ?: continue
             synchronized(sockets) { sockets.add(client) }
-            thread(name = "OlcRtcFetchSocksClient", isDaemon = true) {
+            thread(name = "OlcRtcFetchHttpClient", isDaemon = true) {
                 try {
                     handleClient(client)
                 } catch (_: EOFException) {
-                    // Client closed mid-handshake (OkHttp cancel / probe) — not a crash.
                 } catch (_: IOException) {
-                    // Broken pipe / reset — normal for short-lived fetch sockets.
                 } catch (t: Throwable) {
-                    log("fetch SOCKS client error: ${t.javaClass.simpleName}: ${t.message}")
+                    log("fetch client error: ${t.javaClass.simpleName}: ${t.message}")
                 } finally {
                     synchronized(sockets) { sockets.remove(client) }
                     runCatching { client.close() }
@@ -82,14 +88,73 @@ class OlcRtcFetchSocksBridge(
     }
 
     private fun handleClient(client: Socket) {
-        val clientIn = DataInputStream(client.getInputStream())
-        val clientOut = DataOutputStream(client.getOutputStream())
+        val rawIn = BufferedInputStream(client.getInputStream())
+        val rawOut = BufferedOutputStream(client.getOutputStream())
+        // Peek first byte: SOCKS5 (0x05) vs HTTP ('C' for CONNECT / 'G' GET…)
+        rawIn.mark(1)
+        val first = rawIn.read()
+        if (first < 0) return
+        rawIn.reset()
+        if (first == SOCKS_VERSION.toInt()) {
+            handleSocksClient(client, rawIn, rawOut)
+        } else {
+            handleHttpConnect(client, rawIn, rawOut)
+        }
+    }
+
+    private fun handleHttpConnect(client: Socket, clientIn: InputStream, clientOut: OutputStream) {
+        val header = readHttpHeaderBlock(clientIn) ?: return
+        val requestLine = header.lineSequence().firstOrNull()?.trim().orEmpty()
+        val parts = requestLine.split(' ')
+        if (parts.size < 2 || !parts[0].equals("CONNECT", ignoreCase = true)) {
+            clientOut.write("HTTP/1.1 405 Method Not Allowed\r\nConnection: close\r\n\r\n".toByteArray())
+            clientOut.flush()
+            return
+        }
+        val target = parts[1]
+        val host = target.substringBeforeLast(':').trim().trim('[', ']')
+        val port = target.substringAfterLast(':', "443").toIntOrNull() ?: 443
+        if (host.isBlank()) {
+            clientOut.write("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n".toByteArray())
+            clientOut.flush()
+            return
+        }
+
+        Socket().use { backend ->
+            backend.connect(InetSocketAddress(backendHost, backendPort), CONNECT_TIMEOUT_MS)
+            val backendIn = DataInputStream(backend.getInputStream())
+            val backendOut = DataOutputStream(backend.getOutputStream())
+            if (!handshakeBackendAuth(backendIn, backendOut)) {
+                clientOut.write("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n".toByteArray())
+                clientOut.flush()
+                return
+            }
+            if (!socksConnectDomain(backendIn, backendOut, host, port)) {
+                clientOut.write("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n".toByteArray())
+                clientOut.flush()
+                return
+            }
+            clientOut.write("HTTP/1.1 200 Connection Established\r\n\r\n".toByteArray())
+            clientOut.flush()
+
+            val c2b = relay(client, backend, "c2b")
+            val b2c = relay(backend, client, "b2c")
+            c2b.join()
+            runCatching { backend.close() }
+            runCatching { client.close() }
+            b2c.join(RELAY_JOIN_MS)
+        }
+    }
+
+    private fun handleSocksClient(client: Socket, rawIn: InputStream, rawOut: OutputStream) {
+        val clientIn = DataInputStream(rawIn)
+        val clientOut = DataOutputStream(rawOut)
         if (!handshakeClientNoAuth(clientIn, clientOut)) return
 
         val connectHdr = ByteArray(4)
         clientIn.readFully(connectHdr)
         if (connectHdr[0] != SOCKS_VERSION || connectHdr[1] != CMD_CONNECT) {
-            replyClientFailure(clientOut)
+            replySocksFailure(clientOut)
             return
         }
         val atyp = connectHdr[3]
@@ -104,7 +169,7 @@ class OlcRtcFetchSocksBridge(
             }
             ATYP_IPV6 -> ByteArray(16).also { clientIn.readFully(it) }
             else -> {
-                replyClientFailure(clientOut)
+                replySocksFailure(clientOut)
                 return
             }
         }
@@ -115,10 +180,9 @@ class OlcRtcFetchSocksBridge(
             val backendIn = DataInputStream(backend.getInputStream())
             val backendOut = DataOutputStream(backend.getOutputStream())
             if (!handshakeBackendAuth(backendIn, backendOut)) {
-                replyClientFailure(clientOut)
+                replySocksFailure(clientOut)
                 return
             }
-
             backendOut.write(connectHdr)
             backendOut.write(addrBytes)
             backendOut.write(portBytes)
@@ -139,7 +203,7 @@ class OlcRtcFetchSocksBridge(
                 }
                 ATYP_IPV6 -> ByteArray(16).also { backendIn.readFully(it) }
                 else -> {
-                    replyClientFailure(clientOut)
+                    replySocksFailure(clientOut)
                     return
                 }
             }
@@ -147,7 +211,6 @@ class OlcRtcFetchSocksBridge(
             clientOut.write(repAddr)
             clientOut.write(repPort)
             clientOut.flush()
-
             if (repHdr[1] != REP_SUCCEEDED) return
 
             val c2b = relay(client, backend, "c2b")
@@ -157,6 +220,56 @@ class OlcRtcFetchSocksBridge(
             runCatching { client.close() }
             b2c.join(RELAY_JOIN_MS)
         }
+    }
+
+    private fun socksConnectDomain(
+        input: DataInputStream,
+        output: DataOutputStream,
+        host: String,
+        port: Int,
+    ): Boolean {
+        val hostBytes = host.toByteArray(Charsets.UTF_8)
+        if (hostBytes.size > 255) return false
+        output.write(byteArrayOf(SOCKS_VERSION, CMD_CONNECT, 0x00, ATYP_DOMAIN))
+        output.write(hostBytes.size)
+        output.write(hostBytes)
+        output.write((port ushr 8) and 0xff)
+        output.write(port and 0xff)
+        output.flush()
+
+        val repHdr = ByteArray(4)
+        input.readFully(repHdr)
+        val repAtyp = repHdr[3]
+        when (repAtyp) {
+            ATYP_IPV4 -> ByteArray(4).also { input.readFully(it) }
+            ATYP_DOMAIN -> {
+                val len = input.readUnsignedByte()
+                ByteArray(len).also { input.readFully(it) }
+            }
+            ATYP_IPV6 -> ByteArray(16).also { input.readFully(it) }
+            else -> return false
+        }
+        ByteArray(2).also { input.readFully(it) }
+        return repHdr[0] == SOCKS_VERSION && repHdr[1] == REP_SUCCEEDED
+    }
+
+    private fun readHttpHeaderBlock(input: InputStream): String? {
+        val buf = ByteArray(8192)
+        var n = 0
+        while (n < buf.size) {
+            val b = input.read()
+            if (b < 0) break
+            buf[n++] = b.toByte()
+            if (n >= 4 &&
+                buf[n - 4] == '\r'.code.toByte() &&
+                buf[n - 3] == '\n'.code.toByte() &&
+                buf[n - 2] == '\r'.code.toByte() &&
+                buf[n - 1] == '\n'.code.toByte()
+            ) {
+                return buf.decodeToString(0, n)
+            }
+        }
+        return if (n > 0) buf.decodeToString(0, n) else null
     }
 
     private fun handshakeClientNoAuth(input: DataInputStream, output: DataOutputStream): Boolean {
@@ -195,7 +308,7 @@ class OlcRtcFetchSocksBridge(
         return input.readUnsignedByte() == 0x00
     }
 
-    private fun replyClientFailure(output: DataOutputStream) {
+    private fun replySocksFailure(output: DataOutputStream) {
         runCatching {
             output.write(
                 byteArrayOf(
@@ -229,7 +342,7 @@ class OlcRtcFetchSocksBridge(
         const val ATYP_IPV4: Byte = 0x01
         const val ATYP_DOMAIN: Byte = 0x03
         const val ATYP_IPV6: Byte = 0x04
-        const val CONNECT_TIMEOUT_MS = 3_000
+        const val CONNECT_TIMEOUT_MS = 5_000
         const val RELAY_BUF = 16 * 1024
         const val RELAY_JOIN_MS = 500L
     }

@@ -72,5 +72,7 @@ data class SubscriptionFetchProxy(
     val host: String,
     val port: Int,
     val username: String = "",
-    val password: String = ""
+    val password: String = "",
+    /** Prefer HTTP CONNECT on Android so DNS is done inside the tunnel (not locally). */
+    val useHttpProxy: Boolean = false,
 )

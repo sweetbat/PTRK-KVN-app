@@ -322,15 +322,16 @@ private fun buildSubscriptionOkHttpClient(
         .followSslRedirects(true)
 
     if (subscriptionProxy != null) {
+        val proxyType = if (subscriptionProxy.useHttpProxy) Proxy.Type.HTTP else Proxy.Type.SOCKS
         builder.proxy(
             Proxy(
-                Proxy.Type.SOCKS,
+                proxyType,
                 InetSocketAddress(subscriptionProxy.host, subscriptionProxy.port),
             )
         )
         android.util.Log.i(
             "SubDownload",
-            "OkHttp via SOCKS ${subscriptionProxy.host}:${subscriptionProxy.port}",
+            "OkHttp via $proxyType ${subscriptionProxy.host}:${subscriptionProxy.port}",
         )
     }
 
