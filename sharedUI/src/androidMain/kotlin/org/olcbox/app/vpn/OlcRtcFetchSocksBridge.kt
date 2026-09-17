@@ -355,8 +355,8 @@ class OlcRtcFetchSocksBridge(
         const val ATYP_IPV4: Byte = 0x01
         const val ATYP_DOMAIN: Byte = 0x03
         const val ATYP_IPV6: Byte = 0x04
-        const val CONNECT_TIMEOUT_MS = 5_000
-        const val SOCKET_IDLE_TIMEOUT_MS = 18_000
+        const val CONNECT_TIMEOUT_MS = 4_000
+        const val SOCKET_IDLE_TIMEOUT_MS = 14_000
         const val RELAY_BUF = 16 * 1024
         const val RELAY_JOIN_MS = 500L
     }

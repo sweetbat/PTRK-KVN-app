@@ -854,10 +854,10 @@ class OlcboxVpnService : VpnService() {
         delay(TUNNEL_HANDOFF_DELAY_MS)
         coroutineContext.ensureActive()
 
-        // Keep PTRK inside the TUN so subscription/update traffic uses hev→Mobile
-        // like Telegram — the old SOCKS bridge opened parallel Mobile sessions and
-        // starved the WebRTC pipe (~30s Telegram freeze) while hanging forever.
-        stopOlcRtcFetchBridge()
+        // Keep PTRK inside the TUN (Telegram / normal traffic via hev→Mobile).
+        // Subscription/update still uses a loopback HTTP CONNECT bridge → Mobile SOCKS
+        // so OkHttp does DNS inside the tunnel (mapdns alone + multi-UA retries hung forever).
+        // 127.0.0.1 never enters the TUN, so this does not loop.
         val pfd = establishSystemVpnTunnel(excludeSelfFromVpn = false)
         if (pfd == null) {
             stopMobileAndWait()
@@ -870,13 +870,17 @@ class OlcboxVpnService : VpnService() {
             return
         }
 
+        if (!startOlcRtcFetchBridge()) {
+            addLog("olcRTC fetch bridge failed — subscription refresh may stall")
+        }
+
         coroutineContext.ensureActive()
         if (requestedGeneration != generation) return
 
         setStatus(VpnStatus.Connected)
         resetRecoveryState()
         updateNotification(connectedNotificationText())
-        addLog("VPN tunnel established (olcRTC; app in TUN for fetch)")
+        addLog("VPN tunnel established (olcRTC; app in TUN + loopback fetch bridge)")
         startWatchdog()
     }
 

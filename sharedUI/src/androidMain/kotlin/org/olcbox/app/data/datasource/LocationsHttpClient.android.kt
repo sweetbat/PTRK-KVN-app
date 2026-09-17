@@ -1,18 +1,21 @@
 package org.olcbox.app.data.datasource
 
 import io.ktor.client.HttpClient
-import io.ktor.client.engine.ProxyBuilder
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.HttpTimeout
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import org.olcbox.app.data.identity.RemnawaveDeviceIdentity
 import org.olcbox.app.data.repository.SubscriptionFetchProxy
+import java.io.IOException
 import java.net.Authenticator
 import java.net.InetSocketAddress
 import java.net.PasswordAuthentication
@@ -22,6 +25,8 @@ import java.security.cert.X509Certificate
 import java.util.concurrent.TimeUnit
 import javax.net.ssl.SSLContext
 import javax.net.ssl.X509TrustManager
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 internal actual fun createProxyHttpClient(
     subscriptionProxy: SubscriptionFetchProxy?,
@@ -83,8 +88,27 @@ internal actual suspend fun downloadSubscriptionBodyDirect(
         val appAgent = RemnawaveDeviceIdentity.userAgent()
         val deviceModel = RemnawaveDeviceIdentity.deviceModel()
         val osVersion = RemnawaveDeviceIdentity.osVersion()
+        // Through VPN: one meta + one ClashMeta fallback. Extra UA/flag spam starves olcRTC.
+        val viaVpn = subscriptionProxy != null
+        val yamlAgents = if (viaVpn) {
+            listOf(appAgent, "ClashMeta/1.19.0")
+        } else {
+            listOf(appAgent, "ClashMeta/1.19.0", "mihomo/1.19.0", "clash-verge")
+        }
+        val joiner = if ('?' in url) "&" else "?"
+        val urls = if (viaVpn) {
+            listOf("$url${joiner}flag=meta", url).distinct()
+        } else {
+            listOf(
+                "$url${joiner}flag=meta",
+                "$url${joiner}flag=clash",
+                url,
+            ).distinct()
+        }
+        val maxAttempts = if (viaVpn) 2 else 6
+        var attempts = 0
 
-        fun fetch(
+        suspend fun fetch(
             target: String,
             agent: String,
             includeHwid: Boolean,
@@ -99,7 +123,7 @@ internal actual suspend fun downloadSubscriptionBodyDirect(
             if (includeHwid && !hwid.isNullOrBlank()) {
                 builder.header("x-hwid", hwid)
             }
-            val response = client.newCall(builder.build()).execute()
+            val response = client.newCall(builder.build()).await()
             response.use { resp ->
                 if (!resp.isSuccessful) return null
                 val body = resp.body?.string()?.takeIf { it.isNotBlank() } ?: return null
@@ -123,24 +147,7 @@ internal actual suspend fun downloadSubscriptionBodyDirect(
             }
         }
 
-        // Remnawave External Squad keys off User-Agent. Prefer PTRK-KVN-app + HWID
-        // with ?flag=meta so we get Clash YAML (plain PTRK UA often returns URI dump).
-        // Cap attempts hard — each hung call through the tunnel freezes Telegram/etc.
-        val yamlAgents = if (subscriptionProxy != null) {
-            listOf(appAgent, "ClashMeta/1.19.0", "mihomo/1.19.0")
-        } else {
-            listOf(appAgent, "ClashMeta/1.19.0", "mihomo/1.19.0", "clash-verge")
-        }
-        val joiner = if ('?' in url) "&" else "?"
-        val urls = listOf(
-            "$url${joiner}flag=meta",
-            "$url${joiner}flag=clash",
-            url,
-        ).distinct()
-        val maxAttempts = if (subscriptionProxy != null) 4 else 6
-        var attempts = 0
-
-        fun firstYaml(): Pair<DirectSubscriptionDownload, String>? {
+        suspend fun firstYaml(): Pair<DirectSubscriptionDownload, String>? {
             for (candidate in urls) {
                 for (agent in yamlAgents) {
                     if (attempts >= maxAttempts) return null
@@ -158,18 +165,12 @@ internal actual suspend fun downloadSubscriptionBodyDirect(
         }
 
         val resolved = firstYaml()
-            ?: runCatching {
-                fetch(urls.first(), appAgent, includeHwid = !hwid.isNullOrBlank())
-            }.getOrNull()?.let { it to appAgent }
-            ?: runCatching {
-                fetch(urls.first(), "ClashMeta/1.19.0", includeHwid = !hwid.isNullOrBlank())
-            }.getOrNull()?.let { it to "ClashMeta/1.19.0" }
             ?: error("Subscription server returned an empty response")
 
         val (yaml, usedAgent) = resolved
 
-        // If YAML came via ClashMeta, refresh HWID row with PTRK UA for the panel table.
-        if (!hwid.isNullOrBlank() && usedAgent != appAgent) {
+        // Panel HWID row — only when offline (via VPN every extra CONNECT hurts).
+        if (!viaVpn && !hwid.isNullOrBlank() && usedAgent != appAgent) {
             runCatching {
                 fetch(urls.first(), appAgent, includeHwid = true)
             }
@@ -180,6 +181,20 @@ internal actual suspend fun downloadSubscriptionBodyDirect(
         client.dispatcher.executorService.shutdown()
         client.connectionPool.evictAll()
     }
+}
+
+/** Cancel OkHttp when the coroutine times out — blocking execute() ignored cancellation. */
+private suspend fun Call.await(): Response = suspendCancellableCoroutine { cont ->
+    cont.invokeOnCancellation { cancel() }
+    enqueue(object : Callback {
+        override fun onFailure(call: Call, e: IOException) {
+            if (cont.isActive) cont.resumeWithException(e)
+        }
+
+        override fun onResponse(call: Call, response: Response) {
+            if (cont.isActive) cont.resume(response) else response.close()
+        }
+    })
 }
 
 private fun Response.profileTitle(): String? {
