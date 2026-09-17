@@ -11,6 +11,7 @@ import kotlinx.coroutines.withContext
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.OkHttpClient
+import okhttp3.Protocol
 import okhttp3.Request
 import okhttp3.Response
 import org.olcbox.app.data.identity.RemnawaveDeviceIdentity
@@ -327,6 +328,8 @@ private fun buildSubscriptionOkHttpClient(
         .callTimeout(requestTimeoutMs, TimeUnit.MILLISECONDS)
         .followRedirects(true)
         .followSslRedirects(true)
+        // HTTP/2 multiplexing is fragile over olcRTC; stick to HTTP/1.1 via the bridge.
+        .protocols(listOf(Protocol.HTTP_1_1))
 
     if (subscriptionProxy != null) {
         val proxyType = if (subscriptionProxy.useHttpProxy) Proxy.Type.HTTP else Proxy.Type.SOCKS

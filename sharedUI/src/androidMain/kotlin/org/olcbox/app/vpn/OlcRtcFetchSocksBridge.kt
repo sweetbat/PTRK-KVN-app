@@ -104,7 +104,8 @@ class OlcRtcFetchSocksBridge(
     }
 
     private fun handleHttpConnect(client: Socket, clientIn: InputStream, clientOut: OutputStream) {
-        client.soTimeout = SOCKET_IDLE_TIMEOUT_MS
+        // Handshake only — clear idle timeout before long TLS body relay (APK / YAML).
+        client.soTimeout = CONNECT_TIMEOUT_MS
         val header = readHttpHeaderBlock(clientIn) ?: return
         val requestLine = header.lineSequence().firstOrNull()?.trim().orEmpty()
         val parts = requestLine.split(' ')
@@ -130,7 +131,7 @@ class OlcRtcFetchSocksBridge(
         }
         try {
             Socket().use { backend ->
-                backend.soTimeout = SOCKET_IDLE_TIMEOUT_MS
+                backend.soTimeout = CONNECT_TIMEOUT_MS
                 backend.connect(InetSocketAddress(backendHost, backendPort), CONNECT_TIMEOUT_MS)
                 val backendIn = DataInputStream(backend.getInputStream())
                 val backendOut = DataOutputStream(backend.getOutputStream())
@@ -147,12 +148,11 @@ class OlcRtcFetchSocksBridge(
                 clientOut.write("HTTP/1.1 200 Connection Established\r\n\r\n".toByteArray())
                 clientOut.flush()
 
-                val c2b = relay(client, backend, "c2b")
-                val b2c = relay(backend, client, "b2c")
-                c2b.join(SOCKET_IDLE_TIMEOUT_MS.toLong())
-                runCatching { backend.close() }
-                runCatching { client.close() }
-                b2c.join(RELAY_JOIN_MS)
+                // Unlimited idle during body transfer — WebRTC is slow; a 14s soTimeout
+                // or join+close after c2b EOF truncates TLS → BAD_RECORD_MAC.
+                client.soTimeout = 0
+                backend.soTimeout = 0
+                pipeBidirectional(client, backend)
             }
         } finally {
             sessionPermit.release()
@@ -188,51 +188,68 @@ class OlcRtcFetchSocksBridge(
         }
         val portBytes = ByteArray(2).also { clientIn.readFully(it) }
 
-        Socket().use { backend ->
-            backend.connect(InetSocketAddress(backendHost, backendPort), CONNECT_TIMEOUT_MS)
-            val backendIn = DataInputStream(backend.getInputStream())
-            val backendOut = DataOutputStream(backend.getOutputStream())
-            if (!handshakeBackendAuth(backendIn, backendOut)) {
-                replySocksFailure(clientOut)
-                return
-            }
-            backendOut.write(connectHdr)
-            backendOut.write(addrBytes)
-            backendOut.write(portBytes)
-            backendOut.flush()
-
-            val repHdr = ByteArray(4)
-            backendIn.readFully(repHdr)
-            clientOut.write(repHdr)
-            val repAtyp = repHdr[3]
-            val repAddr = when (repAtyp) {
-                ATYP_IPV4 -> ByteArray(4).also { backendIn.readFully(it) }
-                ATYP_DOMAIN -> {
-                    val len = backendIn.readUnsignedByte()
-                    ByteArray(1 + len).also {
-                        it[0] = len.toByte()
-                        backendIn.readFully(it, 1, len)
-                    }
-                }
-                ATYP_IPV6 -> ByteArray(16).also { backendIn.readFully(it) }
-                else -> {
+        if (!sessionPermit.tryAcquire()) {
+            replySocksFailure(clientOut)
+            return
+        }
+        try {
+            Socket().use { backend ->
+                backend.connect(InetSocketAddress(backendHost, backendPort), CONNECT_TIMEOUT_MS)
+                val backendIn = DataInputStream(backend.getInputStream())
+                val backendOut = DataOutputStream(backend.getOutputStream())
+                if (!handshakeBackendAuth(backendIn, backendOut)) {
                     replySocksFailure(clientOut)
                     return
                 }
-            }
-            val repPort = ByteArray(2).also { backendIn.readFully(it) }
-            clientOut.write(repAddr)
-            clientOut.write(repPort)
-            clientOut.flush()
-            if (repHdr[1] != REP_SUCCEEDED) return
+                backendOut.write(connectHdr)
+                backendOut.write(addrBytes)
+                backendOut.write(portBytes)
+                backendOut.flush()
 
-            val c2b = relay(client, backend, "c2b")
-            val b2c = relay(backend, client, "b2c")
-            c2b.join()
-            runCatching { backend.close() }
-            runCatching { client.close() }
-            b2c.join(RELAY_JOIN_MS)
+                val repHdr = ByteArray(4)
+                backendIn.readFully(repHdr)
+                clientOut.write(repHdr)
+                val repAtyp = repHdr[3]
+                val repAddr = when (repAtyp) {
+                    ATYP_IPV4 -> ByteArray(4).also { backendIn.readFully(it) }
+                    ATYP_DOMAIN -> {
+                        val len = backendIn.readUnsignedByte()
+                        ByteArray(1 + len).also {
+                            it[0] = len.toByte()
+                            backendIn.readFully(it, 1, len)
+                        }
+                    }
+                    ATYP_IPV6 -> ByteArray(16).also { backendIn.readFully(it) }
+                    else -> {
+                        replySocksFailure(clientOut)
+                        return
+                    }
+                }
+                val repPort = ByteArray(2).also { backendIn.readFully(it) }
+                clientOut.write(repAddr)
+                clientOut.write(repPort)
+                clientOut.flush()
+                if (repHdr[1] != REP_SUCCEEDED) return
+
+                client.soTimeout = 0
+                backend.soTimeout = 0
+                pipeBidirectional(client, backend)
+            }
+        } finally {
+            sessionPermit.release()
         }
+    }
+
+    /**
+     * Full-duplex pipe. Half-close on EOF only — never close the peer socket when the
+     * client→server direction finishes (HTTPS clients go idle after the request while
+     * the response body is still flowing). Premature close caused BAD_RECORD_MAC.
+     */
+    private fun pipeBidirectional(client: Socket, backend: Socket) {
+        val c2b = relay(client, backend, "c2b")
+        val b2c = relay(backend, client, "b2c")
+        c2b.join()
+        b2c.join()
     }
 
     private fun socksConnectDomain(
@@ -337,9 +354,10 @@ class OlcRtcFetchSocksBridge(
         return thread(name = "OlcRtcFetchRelay-$name", isDaemon = true) {
             runCatching {
                 from.getInputStream().copyTo(to.getOutputStream(), RELAY_BUF)
+                to.getOutputStream().flush()
             }
+            // Half-close only — peer may still be sending the HTTP/TLS response body.
             runCatching { to.shutdownOutput() }
-            runCatching { from.shutdownInput() }
         }
     }
 
@@ -355,9 +373,7 @@ class OlcRtcFetchSocksBridge(
         const val ATYP_IPV4: Byte = 0x01
         const val ATYP_DOMAIN: Byte = 0x03
         const val ATYP_IPV6: Byte = 0x04
-        const val CONNECT_TIMEOUT_MS = 4_000
-        const val SOCKET_IDLE_TIMEOUT_MS = 14_000
-        const val RELAY_BUF = 16 * 1024
-        const val RELAY_JOIN_MS = 500L
+        const val CONNECT_TIMEOUT_MS = 8_000
+        const val RELAY_BUF = 32 * 1024
     }
 }

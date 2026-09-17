@@ -820,10 +820,10 @@ class LocationsRepositoryImpl(
                         url = url,
                         hwid = hwid,
                         allowInsecureRequests = allowInsecureRequests,
-                        // Hard caps — hung sub refresh must not freeze the tunnel.
-                        connectTimeoutMs = if (subscriptionProxy != null) 4_000 else 6_000,
-                        requestTimeoutMs = if (subscriptionProxy != null) 12_000 else 18_000,
-                        socketTimeoutMs = if (subscriptionProxy != null) 12_000 else 18_000,
+                        // Through VPN: allow slow WebRTC — bridge no longer kills long bodies.
+                        connectTimeoutMs = if (subscriptionProxy != null) 8_000 else 6_000,
+                        requestTimeoutMs = if (subscriptionProxy != null) 45_000 else 18_000,
+                        socketTimeoutMs = if (subscriptionProxy != null) 45_000 else 18_000,
                         subscriptionProxy = subscriptionProxy,
                     )
                 } catch (error: Throwable) {

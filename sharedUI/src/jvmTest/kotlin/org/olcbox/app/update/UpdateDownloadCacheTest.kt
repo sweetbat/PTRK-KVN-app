@@ -37,12 +37,11 @@ class UpdateDownloadCacheTest {
             val asset = AppUpdateAsset("update.apk", url, 8193)
             assertFailsWith<java.io.IOException> { cache.download(asset) }
             assertNull(cache.downloadedFile(asset))
-            assertTrue(directory.listFiles().orEmpty().isEmpty())
         }
     }
 
     @Test
-    fun cancellationRemovesPartialFileAndCanBeRetried() = runBlocking {
+    fun cancellationCanBeRetried() = runBlocking {
         withDownloadServer { directory, url, requests ->
             val cache = UpdateDownloadCache(directory)
             val asset = AppUpdateAsset("update.apk", url, 8192)
@@ -50,9 +49,8 @@ class UpdateDownloadCacheTest {
                 cache.download(asset) { throw CancellationException("screen closed") }
             }
             assertNull(cache.downloadedFile(asset))
-            assertTrue(directory.listFiles().orEmpty().isEmpty())
             assertEquals(8192, cache.download(asset).length())
-            assertEquals(2, requests())
+            assertTrue(requests() >= 2)
         }
     }
 
@@ -65,8 +63,20 @@ class UpdateDownloadCacheTest {
         server.createContext("/update.apk") { exchange ->
             requests.incrementAndGet()
             val payload = ByteArray(8192) { (it % 251).toByte() }
-            exchange.sendResponseHeaders(200, payload.size.toLong())
-            exchange.responseBody.use { it.write(payload) }
+            val range = exchange.requestHeaders.getFirst("Range")
+            if (range != null && range.startsWith("bytes=")) {
+                val start = range.removePrefix("bytes=").substringBefore('-').toLongOrNull() ?: 0L
+                val slice = payload.copyOfRange(start.toInt().coerceAtLeast(0), payload.size)
+                exchange.responseHeaders.add(
+                    "Content-Range",
+                    "bytes $start-${payload.size - 1}/${payload.size}",
+                )
+                exchange.sendResponseHeaders(206, slice.size.toLong())
+                exchange.responseBody.use { it.write(slice) }
+            } else {
+                exchange.sendResponseHeaders(200, payload.size.toLong())
+                exchange.responseBody.use { it.write(payload) }
+            }
         }
         server.start()
         try {

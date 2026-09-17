@@ -496,7 +496,7 @@ class HomeScreenViewModel(
         onComplete: (updatedCount: Int) -> Unit = {}
     ) {
         viewModelScope.launch {
-            val updatedCount = withTimeoutOrNull(30_000L) {
+            val updatedCount = withTimeoutOrNull(60_000L) {
                 locationsRepository.refreshSubscriptions(
                     subscriptionProxy = vpnManager.subscriptionFetchProxy()
                 )
@@ -513,7 +513,7 @@ class HomeScreenViewModel(
     ) {
         viewModelScope.launch {
             try {
-                val updatedCount = withTimeoutOrNull(25_000L) {
+                val updatedCount = withTimeoutOrNull(55_000L) {
                     locationsRepository.refreshSubscription(
                         subscriptionUrl = subscriptionUrl,
                         subscriptionProxy = vpnManager.subscriptionFetchProxy()

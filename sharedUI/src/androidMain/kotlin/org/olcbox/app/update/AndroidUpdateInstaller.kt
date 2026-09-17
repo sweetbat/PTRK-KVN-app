@@ -104,7 +104,8 @@ class AndroidUpdateInstaller(
             val proxy = proxyProvider()
             Result.success(withProxyAuthentication(proxy) {
                 val connectionProxy = proxy?.let {
-                    Proxy(Proxy.Type.SOCKS, InetSocketAddress(it.host, it.port))
+                    val type = if (it.useHttpProxy) Proxy.Type.HTTP else Proxy.Type.SOCKS
+                    Proxy(type, InetSocketAddress(it.host, it.port))
                 } ?: Proxy.NO_PROXY
                 downloads.download(asset, connectionProxy) { reportProgress(it, onProgress) }
             })
