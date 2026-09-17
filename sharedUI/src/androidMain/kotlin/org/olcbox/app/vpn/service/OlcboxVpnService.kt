@@ -547,6 +547,10 @@ class OlcboxVpnService : VpnService() {
         if (requestedGeneration != generation) return
 
         if (startMobile(location, upstream, requestedGeneration, setErrorOnFailure = false)) {
+            // Mobile SOCKS was replaced — refresh Clash/bridge so fetch/APK keep working.
+            if (connectionMode == AndroidConnectionMode.Tun) {
+                runCatching { startOlcRtcFetchProxy(socksListenPort) }
+            }
             setStatus(VpnStatus.Connected)
             resetRecoveryState()
             updateNotification(connectedNotificationText())
@@ -902,10 +906,18 @@ class OlcboxVpnService : VpnService() {
 
     private suspend fun startOlcRtcRoutingRouter(olcRtcSocksPort: Int): Boolean {
         stopOlcRtcFetchBridge()
-        stopOlcRtcRoutingRouter()
-        if (isLocalSocksPortOpen(OlcRtcRoutingConfig.MIXED_PORT)) {
-            addLog("Port ${OlcRtcRoutingConfig.MIXED_PORT} busy — waiting")
-            waitForSocksPortReleased(OlcRtcRoutingConfig.MIXED_PORT, 2_000L)
+        // Avoid STOP→START race that cancelled Clash with err:Job was cancelled → bridge.
+        val statusNow = OlcRtcRoutingService.readStatus(applicationContext)
+        val portOpen = isLocalSocksPortOpen(OlcRtcRoutingConfig.MIXED_PORT)
+        if (portOpen && (statusNow == "ok" || statusNow.startsWith("ok"))) {
+            olcRtcRoutingActive = true
+            addLog("olcRTC Clash mixed-port ${OlcRtcRoutingConfig.MIXED_PORT} already up")
+            return true
+        }
+        if (portOpen || (statusNow.isNotBlank() && statusNow != "stopped")) {
+            stopOlcRtcRoutingRouter()
+            waitForSocksPortReleased(OlcRtcRoutingConfig.MIXED_PORT, 2_500L)
+            delay(400)
         }
         val handle = currentNetwork?.networkHandle ?: 0L
         addLog(
@@ -935,7 +947,8 @@ class OlcboxVpnService : VpnService() {
                     addLog("olcRTC Clash status=$st")
                 }
             }
-            if (st.startsWith("err:")) {
+            // Ignore cancelled — a fresh START may still be in flight.
+            if (st.startsWith("err:") && !st.contains("cancelled", ignoreCase = true)) {
                 addLog("olcRTC Clash router failed: ${st.removePrefix("err:")}")
                 stopOlcRtcRoutingRouter()
                 return false
@@ -1356,11 +1369,34 @@ class OlcboxVpnService : VpnService() {
         watchdogStalledSamples = 0
         val mode = connectionMode
         val watchdogStartedAtMs = System.currentTimeMillis()
+        var reconnectingSinceMs = 0L
         watchdogJob = scope.launch {
-            while (isActive && OlcboxVpnState.status.value is VpnStatus.Connected) {
+            while (isActive) {
                 delay(WATCHDOG_INTERVAL_MS)
-                // Keep CPU/network alive past Doze — timeout was only 2 min before.
+                val statusNow = OlcboxVpnState.status.value
+                if (statusNow !is VpnStatus.Connected && statusNow !is VpnStatus.Reconnecting) {
+                    break
+                }
                 refreshWakeLock()
+
+                if (statusNow is VpnStatus.Reconnecting) {
+                    if (reconnectingSinceMs == 0L) {
+                        reconnectingSinceMs = System.currentTimeMillis()
+                    } else if (
+                        System.currentTimeMillis() - reconnectingSinceMs >= RECONNECT_STUCK_MS
+                    ) {
+                        addLog("Watchdog: reconnect stuck — full restart")
+                        reconnectingSinceMs = 0L
+                        requestTransportRecovery(
+                            "Reconnect stuck",
+                            fullRestart = true,
+                            setReconnectingImmediately = true,
+                        )
+                    }
+                    continue
+                }
+                reconnectingSinceMs = 0L
+
                 // Mihomo sessions have no Mobile/hev — skip olcRTC/tun2socks checks entirely.
                 if (mihomoTunActive) {
                     val upstream = findActiveUpstreamNetwork()
@@ -1408,12 +1444,10 @@ class OlcboxVpnService : VpnService() {
                         return@launch
                     }
 
-                    // Keep :7890 up. Prefer quick bridge — full Clash re-init is slow.
+                    // Prefer Clash; bridge causes BAD_DECRYPT on large APKs.
                     !isLocalSocksPortOpen(OlcRtcRoutingConfig.MIXED_PORT) -> {
-                        addLog("Watchdog: olcRTC fetch :${OlcRtcRoutingConfig.MIXED_PORT} down — bridge")
-                        if (!startOlcRtcFetchBridge()) {
-                            addLog("Watchdog: fetch bridge restart failed")
-                        }
+                        addLog("Watchdog: olcRTC fetch :${OlcRtcRoutingConfig.MIXED_PORT} down — restarting")
+                        startOlcRtcFetchProxy(socksListenPort)
                     }
                 }
 
@@ -1794,9 +1828,10 @@ class OlcboxVpnService : VpnService() {
 
     private fun onScreenAwake() {
         val status = OlcboxVpnState.status.value
-        if (status !is VpnStatus.Connected) return
+        if (status !is VpnStatus.Connected && status !is VpnStatus.Reconnecting) return
         refreshWakeLock(force = true)
         if (mihomoTunActive) {
+            if (status !is VpnStatus.Connected) return
             runCatching { MihomoEngine.resetConnections() }
             val upstream = findActiveUpstreamNetwork()
             if (upstream != null) {
@@ -1806,6 +1841,41 @@ class OlcboxVpnService : VpnService() {
                 pushUpstreamDnsToMihomo(upstream)
             }
             addLog("Screen on: reset Mihomo connections")
+            return
+        }
+        // olcRTC: after Doze/screen-off WebRTC often looks "up" but is dead — recover.
+        scope.launch {
+            val upstream = findActiveUpstreamNetwork()
+            if (upstream != null && currentNetwork != upstream) {
+                updateUnderlyingNetwork(upstream)
+            }
+            when {
+                !isRtcRunning() -> {
+                    addLog("Screen on: olcRTC stopped — recovering")
+                    requestTransportRecovery("Screen on: olcRTC stopped", fullRestart = false)
+                }
+                connectionMode == AndroidConnectionMode.Tun &&
+                    tun2socksThread?.isAlive != true -> {
+                    addLog("Screen on: tun2socks dead — recovering")
+                    requestTransportRecovery("Screen on: tun2socks stopped", fullRestart = true)
+                }
+                connectionMode == AndroidConnectionMode.Tun && isTunTrafficStalled() -> {
+                    addLog("Screen on: TUN stalled — recovering")
+                    requestTransportRecovery("Screen on: TUN stalled", fullRestart = false)
+                }
+                status is VpnStatus.Reconnecting -> {
+                    addLog("Screen on: still reconnecting — kick recovery")
+                    requestTransportRecovery("Screen on: stuck reconnecting", fullRestart = false)
+                }
+                else -> {
+                    if (!isLocalSocksPortOpen(OlcRtcRoutingConfig.MIXED_PORT)) {
+                        addLog("Screen on: fetch :7890 down — restarting")
+                        startOlcRtcFetchProxy(socksListenPort)
+                    } else {
+                        addLog("Screen on: olcRTC still up")
+                    }
+                }
+            }
         }
     }
 
@@ -2452,6 +2522,7 @@ class OlcboxVpnService : VpnService() {
         // Was 3 (~45s): aggressive recoveries left UI "Connected" with dead internet.
         private const val WATCHDOG_STALLED_SAMPLE_LIMIT = 10
         private const val WATCHDOG_STALL_GRACE_MS = 90_000L
+        private const val RECONNECT_STUCK_MS = 45_000L
         private const val RTC_RECOVERY_GRACE_MS = 2_500L
         private const val RTC_FAILURE_WINDOW_MS = 6_000L
         private const val RTC_FAILED_RECOVERY_THRESHOLD = 1

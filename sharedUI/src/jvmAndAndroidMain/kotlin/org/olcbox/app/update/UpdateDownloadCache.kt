@@ -112,10 +112,11 @@ internal class UpdateDownloadCache(private val directory: File) {
         val connection = URL(asset.downloadUrl).openConnection(proxy) as HttpURLConnection
         try {
             connection.instanceFollowRedirects = true
-            connection.connectTimeout = 15_000
-            connection.readTimeout = 120_000
+            connection.connectTimeout = 20_000
+            connection.readTimeout = 180_000
             connection.setRequestProperty("User-Agent", "PTRK-KVN-app")
             connection.setRequestProperty("Accept", "*/*")
+            connection.setRequestProperty("Connection", "close")
             if (rangeStart > 0L) {
                 connection.setRequestProperty("Range", "bytes=$rangeStart-")
             }
@@ -147,20 +148,15 @@ internal class UpdateDownloadCache(private val directory: File) {
             connection.inputStream.use { input ->
                 RandomAccessFile(partial, "rw").use { raf ->
                     if (append) raf.seek(rangeStart) else raf.setLength(0)
-                    // Small buffer + pacing so olcRTC WebRTC is not starved by APK bulk.
-                    val buffer = ByteArray(8 * 1024)
-                    var sincePace = 0L
+                    // Larger buffer — olcRTC can do multi‑Mbps; tiny paced reads made APK crawl
+                    // and prolonged TLS sessions → BAD_DECRYPT / unexpected end of stream.
+                    val buffer = ByteArray(64 * 1024)
                     while (true) {
                         coroutineContext.ensureActive()
                         val read = input.read(buffer)
                         if (read < 0) break
                         raf.write(buffer, 0, read)
                         copied += read
-                        sincePace += read
-                        if (sincePace >= PACE_EVERY_BYTES) {
-                            sincePace = 0L
-                            delay(PACE_DELAY_MS)
-                        }
                         if (total != null && total > 0L) {
                             onProgress((copied.toDouble() / total).toFloat().coerceIn(0f, 0.99f))
                         }
@@ -183,8 +179,6 @@ internal class UpdateDownloadCache(private val directory: File) {
     }
 
     private companion object {
-        const val MAX_ATTEMPTS = 8
-        const val PACE_EVERY_BYTES = 256L * 1024L
-        const val PACE_DELAY_MS = 40L
+        const val MAX_ATTEMPTS = 10
     }
 }

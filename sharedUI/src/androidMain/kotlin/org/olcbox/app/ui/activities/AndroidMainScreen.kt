@@ -101,9 +101,9 @@ fun AndroidMainScreen(
             context = context,
             proxyProvider = { vpnManager.subscriptionFetchProxy() },
             healTransport = {
-                vpnManager.healTransportAfterFetch(
-                    restartTransport = vpnManager.isOlcrtcFetchSession(),
-                )
+                // After APK: light reset only. Soft Mobile restart mid-session caused
+                // Clash cancel → bridge → BAD_DECRYPT on the next attempt.
+                vpnManager.healTransportAfterFetch(restartTransport = false)
             },
         )
     }
