@@ -496,9 +496,11 @@ class HomeScreenViewModel(
         onComplete: (updatedCount: Int) -> Unit = {}
     ) {
         viewModelScope.launch {
-            val updatedCount = locationsRepository.refreshSubscriptions(
-                subscriptionProxy = vpnManager.subscriptionFetchProxy()
-            )
+            val updatedCount = withTimeoutOrNull(45_000L) {
+                locationsRepository.refreshSubscriptions(
+                    subscriptionProxy = vpnManager.subscriptionFetchProxy()
+                )
+            } ?: 0
             loadCurrentConfigNow()
             onComplete(updatedCount)
         }
@@ -511,10 +513,17 @@ class HomeScreenViewModel(
     ) {
         viewModelScope.launch {
             try {
-                val updatedCount = locationsRepository.refreshSubscription(
-                    subscriptionUrl = subscriptionUrl,
-                    subscriptionProxy = vpnManager.subscriptionFetchProxy()
-                )
+                val updatedCount = withTimeoutOrNull(40_000L) {
+                    locationsRepository.refreshSubscription(
+                        subscriptionUrl = subscriptionUrl,
+                        subscriptionProxy = vpnManager.subscriptionFetchProxy()
+                    )
+                }
+                if (updatedCount == null) {
+                    onError("Subscription update timed out")
+                    loadCurrentConfigNow()
+                    return@launch
+                }
                 loadCurrentConfigNow()
                 onComplete(updatedCount)
             } catch (error: CancellationException) {

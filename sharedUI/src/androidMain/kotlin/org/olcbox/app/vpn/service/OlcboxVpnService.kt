@@ -839,8 +839,9 @@ class OlcboxVpnService : VpnService() {
         if (requestedGeneration != generation) return
 
         if (connectionMode == AndroidConnectionMode.Proxy) {
+            // Proxy mode has no TUN — keep a local HTTP CONNECT front for UI fetches.
             if (!startOlcRtcFetchBridge()) {
-                addLog("olcRTC fetch SOCKS bridge failed — subscription refresh may stall")
+                addLog("olcRTC fetch bridge failed — subscription refresh may stall")
             }
             setStatus(VpnStatus.Connected)
             resetRecoveryState()
@@ -853,9 +854,11 @@ class OlcboxVpnService : VpnService() {
         delay(TUNNEL_HANDOFF_DELAY_MS)
         coroutineContext.ensureActive()
 
-        // TUN still goes straight to Mobile SOCKS (server-side whitelist).
-        // Fetch bridge on :7890 is only for UI subscription/update (OkHttp, no SOCKS auth).
-        val pfd = establishSystemVpnTunnel()
+        // Keep PTRK inside the TUN so subscription/update traffic uses hev→Mobile
+        // like Telegram — the old SOCKS bridge opened parallel Mobile sessions and
+        // starved the WebRTC pipe (~30s Telegram freeze) while hanging forever.
+        stopOlcRtcFetchBridge()
+        val pfd = establishSystemVpnTunnel(excludeSelfFromVpn = false)
         if (pfd == null) {
             stopMobileAndWait()
             return
@@ -870,14 +873,10 @@ class OlcboxVpnService : VpnService() {
         coroutineContext.ensureActive()
         if (requestedGeneration != generation) return
 
-        if (!startOlcRtcFetchBridge()) {
-            addLog("olcRTC fetch SOCKS bridge failed — subscription refresh may stall")
-        }
-
         setStatus(VpnStatus.Connected)
         resetRecoveryState()
         updateNotification(connectedNotificationText())
-        addLog("VPN tunnel established (olcRTC; fetch via :${OlcRtcRoutingConfig.MIXED_PORT})")
+        addLog("VPN tunnel established (olcRTC; app in TUN for fetch)")
         startWatchdog()
     }
 
@@ -1086,6 +1085,8 @@ class OlcboxVpnService : VpnService() {
         dnsServers: List<String> = listOf(MAPDNS_ADDRESS),
         extraBypassPackages: Collection<String> = emptyList(),
         useMapDns: Boolean = true,
+        /** When false, PTRK stays inside the TUN (olcRTC: fetch via hev, no SOCKS bridge). */
+        excludeSelfFromVpn: Boolean = true,
     ): ParcelFileDescriptor? {
         return try {
             val builder = Builder()
@@ -1106,11 +1107,14 @@ class OlcboxVpnService : VpnService() {
                 .ifEmpty { listOf(if (useMapDns) MAPDNS_ADDRESS else RuSafeDns.YANDEX_PLAIN.first()) }
                 .forEach { builder.addDnsServer(it) }
 
-            if (!applySplitTunneling(builder, extraBypassPackages)) return null
+            if (!applySplitTunneling(builder, extraBypassPackages, excludeSelfFromVpn)) return null
 
             currentNetwork?.let { builder.setUnderlyingNetworks(arrayOf(it)) }
             builder.establish().also {
-                addLog("VPN establish v4=$TUN_IPV4_ADDRESS v6=$TUN_IPV6_ADDRESS mapdns=$useMapDns")
+                addLog(
+                    "VPN establish v4=$TUN_IPV4_ADDRESS v6=$TUN_IPV6_ADDRESS " +
+                        "mapdns=$useMapDns excludeSelf=$excludeSelfFromVpn",
+                )
             }
         } catch (e: Exception) {
             addLog("VPN establish failed: ${e.message}")
@@ -1123,10 +1127,15 @@ class OlcboxVpnService : VpnService() {
     private fun applySplitTunneling(
         builder: Builder,
         extraBypassPackages: Collection<String> = emptyList(),
+        excludeSelfFromVpn: Boolean = true,
     ): Boolean {
         return when (splitTunnelMode) {
             AndroidSplitTunnelMode.AllApps -> {
-                addDisallowedApp(builder, packageName, "PTRK-KVN")
+                if (excludeSelfFromVpn) {
+                    addDisallowedApp(builder, packageName, "PTRK-KVN")
+                } else {
+                    addLog("PTRK-KVN stays in TUN (olcRTC sub/update via hev)")
+                }
                 extraBypassPackages
                     .map { it.trim() }
                     .filter { it.isNotBlank() && it != packageName }
@@ -1161,7 +1170,9 @@ class OlcboxVpnService : VpnService() {
             }
 
             AndroidSplitTunnelMode.BypassSelected -> {
-                addDisallowedApp(builder, packageName, "PTRK-KVN")
+                if (excludeSelfFromVpn) {
+                    addDisallowedApp(builder, packageName, "PTRK-KVN")
+                }
                 val bypass = (
                     splitTunnelBypassApps + extraBypassPackages
                     )

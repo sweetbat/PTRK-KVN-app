@@ -565,13 +565,27 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
             return null
         }
 
-        // HTTP CONNECT: OkHttp must not resolve DNS locally (app is excluded from TUN).
-        // Mihomo mixed-port and olcRTC fetch bridge both accept HTTP CONNECT on 7890.
-        return SubscriptionFetchProxy(
-            host = "127.0.0.1",
-            port = 7890,
-            useHttpProxy = true,
-        )
+        // Mihomo: Clash mixed-port (app is excluded from TUN).
+        // olcRTC TUN mode: app stays in TUN — fetch goes through hev, no local proxy.
+        // olcRTC Proxy mode: HTTP CONNECT bridge on 7890.
+        return when (readActiveEngine()) {
+            "olcrtc" -> {
+                if (_connectionMode.value == AndroidConnectionMode.Proxy) {
+                    SubscriptionFetchProxy(
+                        host = "127.0.0.1",
+                        port = 7890,
+                        useHttpProxy = true,
+                    )
+                } else {
+                    null
+                }
+            }
+            else -> SubscriptionFetchProxy(
+                host = "127.0.0.1",
+                port = 7890,
+                useHttpProxy = true,
+            )
+        }
     }
 
     override fun connectedSinceEpochMs(): Long? {

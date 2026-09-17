@@ -37,6 +37,7 @@ class OlcRtcFetchSocksBridge(
     private var serverSocket: ServerSocket? = null
     private var acceptThread: Thread? = null
     private val sockets = mutableSetOf<Socket>()
+    private val sessionPermit = java.util.concurrent.Semaphore(1)
 
     val isRunning: Boolean
         get() = !stopped && serverSocket?.isClosed == false && acceptThread?.isAlive == true
@@ -103,6 +104,7 @@ class OlcRtcFetchSocksBridge(
     }
 
     private fun handleHttpConnect(client: Socket, clientIn: InputStream, clientOut: OutputStream) {
+        client.soTimeout = SOCKET_IDLE_TIMEOUT_MS
         val header = readHttpHeaderBlock(clientIn) ?: return
         val requestLine = header.lineSequence().firstOrNull()?.trim().orEmpty()
         val parts = requestLine.split(' ')
@@ -120,29 +122,40 @@ class OlcRtcFetchSocksBridge(
             return
         }
 
-        Socket().use { backend ->
-            backend.connect(InetSocketAddress(backendHost, backendPort), CONNECT_TIMEOUT_MS)
-            val backendIn = DataInputStream(backend.getInputStream())
-            val backendOut = DataOutputStream(backend.getOutputStream())
-            if (!handshakeBackendAuth(backendIn, backendOut)) {
-                clientOut.write("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n".toByteArray())
-                clientOut.flush()
-                return
-            }
-            if (!socksConnectDomain(backendIn, backendOut, host, port)) {
-                clientOut.write("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n".toByteArray())
-                clientOut.flush()
-                return
-            }
-            clientOut.write("HTTP/1.1 200 Connection Established\r\n\r\n".toByteArray())
+        // Serialize fetches so one hung CONNECT cannot pile onto Mobile SOCKS.
+        if (!sessionPermit.tryAcquire()) {
+            clientOut.write("HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\n\r\n".toByteArray())
             clientOut.flush()
+            return
+        }
+        try {
+            Socket().use { backend ->
+                backend.soTimeout = SOCKET_IDLE_TIMEOUT_MS
+                backend.connect(InetSocketAddress(backendHost, backendPort), CONNECT_TIMEOUT_MS)
+                val backendIn = DataInputStream(backend.getInputStream())
+                val backendOut = DataOutputStream(backend.getOutputStream())
+                if (!handshakeBackendAuth(backendIn, backendOut)) {
+                    clientOut.write("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n".toByteArray())
+                    clientOut.flush()
+                    return
+                }
+                if (!socksConnectDomain(backendIn, backendOut, host, port)) {
+                    clientOut.write("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n".toByteArray())
+                    clientOut.flush()
+                    return
+                }
+                clientOut.write("HTTP/1.1 200 Connection Established\r\n\r\n".toByteArray())
+                clientOut.flush()
 
-            val c2b = relay(client, backend, "c2b")
-            val b2c = relay(backend, client, "b2c")
-            c2b.join()
-            runCatching { backend.close() }
-            runCatching { client.close() }
-            b2c.join(RELAY_JOIN_MS)
+                val c2b = relay(client, backend, "c2b")
+                val b2c = relay(backend, client, "b2c")
+                c2b.join(SOCKET_IDLE_TIMEOUT_MS.toLong())
+                runCatching { backend.close() }
+                runCatching { client.close() }
+                b2c.join(RELAY_JOIN_MS)
+            }
+        } finally {
+            sessionPermit.release()
         }
     }
 
@@ -343,6 +356,7 @@ class OlcRtcFetchSocksBridge(
         const val ATYP_DOMAIN: Byte = 0x03
         const val ATYP_IPV6: Byte = 0x04
         const val CONNECT_TIMEOUT_MS = 5_000
+        const val SOCKET_IDLE_TIMEOUT_MS = 18_000
         const val RELAY_BUF = 16 * 1024
         const val RELAY_JOIN_MS = 500L
     }

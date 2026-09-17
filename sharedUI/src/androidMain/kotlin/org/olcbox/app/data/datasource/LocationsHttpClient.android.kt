@@ -125,40 +125,32 @@ internal actual suspend fun downloadSubscriptionBodyDirect(
 
         // Remnawave External Squad keys off User-Agent. Prefer PTRK-KVN-app + HWID
         // with ?flag=meta so we get Clash YAML (plain PTRK UA often returns URI dump).
-        // ClashMeta without allowlisting returns a stub proxy "Приложение не поддерживается".
-        val yamlAgents = listOf(
-            appAgent,
-            "ClashMeta/1.19.0",
-            "clash.meta/v1.19.0",
-            "mihomo/1.19.0",
-            "clash-verge",
-            "Clash",
-        )
+        // Cap attempts hard — each hung call through the tunnel freezes Telegram/etc.
+        val yamlAgents = if (subscriptionProxy != null) {
+            listOf(appAgent, "ClashMeta/1.19.0", "mihomo/1.19.0")
+        } else {
+            listOf(appAgent, "ClashMeta/1.19.0", "mihomo/1.19.0", "clash-verge")
+        }
         val joiner = if ('?' in url) "&" else "?"
         val urls = listOf(
             "$url${joiner}flag=meta",
             "$url${joiner}flag=clash",
             url,
         ).distinct()
+        val maxAttempts = if (subscriptionProxy != null) 4 else 6
+        var attempts = 0
 
         fun firstYaml(): Pair<DirectSubscriptionDownload, String>? {
             for (candidate in urls) {
                 for (agent in yamlAgents) {
+                    if (attempts >= maxAttempts) return null
+                    attempts++
                     val withHwid = !hwid.isNullOrBlank()
                     val downloaded = runCatching {
                         fetch(candidate, agent, includeHwid = withHwid)
                     }.getOrNull()
                     if (downloaded != null && usable(downloaded.content)) {
                         return downloaded to agent
-                    }
-                    // Retry without HWID only for Clash-like agents (legacy panels).
-                    if (withHwid && agent != appAgent) {
-                        val fallback = runCatching {
-                            fetch(candidate, agent, includeHwid = false)
-                        }.getOrNull()
-                        if (fallback != null && usable(fallback.content)) {
-                            return fallback to agent
-                        }
                     }
                 }
             }

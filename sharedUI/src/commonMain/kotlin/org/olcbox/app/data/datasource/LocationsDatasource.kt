@@ -815,15 +815,16 @@ class LocationsRepositoryImpl(
                         url = url,
                         hwid = hwid,
                         allowInsecureRequests = allowInsecureRequests,
-                        connectTimeoutMs = if (subscriptionProxy != null) 6_000 else 8_000,
-                        requestTimeoutMs = if (subscriptionProxy != null) 25_000 else 20_000,
-                        socketTimeoutMs = if (subscriptionProxy != null) 25_000 else 20_000,
+                        // Hard caps — hung sub refresh must not freeze the tunnel for minutes.
+                        connectTimeoutMs = if (subscriptionProxy != null) 5_000 else 6_000,
+                        requestTimeoutMs = if (subscriptionProxy != null) 15_000 else 18_000,
+                        socketTimeoutMs = if (subscriptionProxy != null) 15_000 else 18_000,
                         subscriptionProxy = subscriptionProxy,
                     )
                 } catch (error: Throwable) {
                     if (error is CancellationException) throw error
                     if (subscriptionProxy != null) {
-                        // Fallback: Ktor via same SOCKS if OkHttp path fails.
+                        // Fallback: Ktor via same proxy if OkHttp path fails (one shot).
                         downloadTextFromUrlViaKtor(
                             url = url,
                             hwid = hwid,
