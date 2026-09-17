@@ -65,28 +65,26 @@ class OlcRtcRoutingService : Service() {
         val socksPassword = intent?.getStringExtra(EXTRA_SOCKS_PASSWORD).orEmpty()
 
         scope.launch {
+            var errorMessage: String? = null
             val ok = runCatching {
                 val app = applicationContext
                 MihomoAndroidContext.app = app
+                // Fetch-only profile is MATCH→PROXY; bind still helps Clash DNS on whitelist.
                 bindToUpstream(networkHandle)
 
                 val yamlFile = if (!profilePath.isNullOrBlank()) {
                     java.io.File(profilePath).takeIf { it.isFile }
                 } else {
                     null
-                } ?: run {
-                    val sourceText = OlcRtcRoutingConfig.findSourceProfile(app)?.readText()
-                    OlcRtcRoutingConfig.build(
-                        context = app,
-                        olcRtcSocksPort = socksPort,
-                        sourceYaml = sourceText,
-                        socksUsername = socksUsername,
-                        socksPassword = socksPassword,
-                    )
-                }
+                } ?: OlcRtcRoutingConfig.buildFetchOnly(
+                    context = app,
+                    olcRtcSocksPort = socksPort,
+                    socksUsername = socksUsername,
+                    socksPassword = socksPassword,
+                )
                 Log.i(
                     TAG,
-                    "routing yaml=${yamlFile.absolutePath} socks=$socksPort netHandle=$networkHandle",
+                    "fetch yaml=${yamlFile.absolutePath} socks=$socksPort netHandle=$networkHandle bytes=${yamlFile.length()}",
                 )
                 MihomoEngine.ensureInit(app)
                 val setup = MihomoEngine.setupProfile(
@@ -96,7 +94,8 @@ class OlcRtcRoutingService : Service() {
                         "PROXY" to OlcRtcRoutingConfig.PROXY_NAME,
                         "GLOBAL" to OlcRtcRoutingConfig.PROXY_NAME,
                     ),
-                    mode = "rule",
+                    mode = "global",
+                    selectedProxyName = OlcRtcRoutingConfig.PROXY_NAME,
                 )
                 if (setup.isNotBlank() &&
                     !setup.equals("null", true) &&
@@ -112,7 +111,8 @@ class OlcRtcRoutingService : Service() {
                 }
                 true
             }.onFailure {
-                Log.e(TAG, "olcRTC routing start failed", it)
+                errorMessage = it.message ?: it.javaClass.simpleName
+                Log.e(TAG, "olcRTC fetch router start failed", it)
             }.getOrDefault(false)
 
             receiver?.send(
@@ -120,7 +120,7 @@ class OlcRtcRoutingService : Service() {
                 Bundle().apply {
                     putBoolean(EXTRA_OK, ok)
                     putInt(EXTRA_MIXED_PORT, OlcRtcRoutingConfig.MIXED_PORT)
-                    putString(EXTRA_ERROR, if (ok) null else "setup failed")
+                    putString(EXTRA_ERROR, if (ok) null else (errorMessage ?: "setup failed"))
                 },
             )
             if (!ok) {
@@ -195,13 +195,14 @@ class OlcRtcRoutingService : Service() {
             olcRtcSocksPort: Int,
             profilePath: String?,
             networkHandle: Long,
-            onResult: (Boolean) -> Unit,
+            onResult: (ok: Boolean, error: String?) -> Unit,
             socksUsername: String = "",
             socksPassword: String = "",
         ) {
             val receiver = object : ResultReceiver(Handler(Looper.getMainLooper())) {
                 override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
-                    onResult(resultCode == RESULT_OK && resultData?.getBoolean(EXTRA_OK) == true)
+                    val ok = resultCode == RESULT_OK && resultData?.getBoolean(EXTRA_OK) == true
+                    onResult(ok, resultData?.getString(EXTRA_ERROR))
                 }
             }
             val intent = Intent(context, OlcRtcRoutingService::class.java).apply {

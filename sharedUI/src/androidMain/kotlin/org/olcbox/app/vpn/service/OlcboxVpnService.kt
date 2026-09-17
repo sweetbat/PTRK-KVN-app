@@ -839,8 +839,8 @@ class OlcboxVpnService : VpnService() {
         if (requestedGeneration != generation) return
 
         if (connectionMode == AndroidConnectionMode.Proxy) {
-            // Prefer Clash mixed-port (same as Mihomo fetch); bridge is fallback.
-            if (!startOlcRtcFetchProxy(socksListenPort)) {
+            // No TUN / hev — Clash or bridge both OK (nothing to starve).
+            if (!startOlcRtcFetchProxy(socksListenPort, allowBridgeFallback = true)) {
                 addLog("olcRTC fetch proxy failed — subscription refresh may stall")
             }
             setStatus(VpnStatus.Connected)
@@ -854,11 +854,11 @@ class OlcboxVpnService : VpnService() {
         delay(TUNNEL_HANDOFF_DELAY_MS)
         coroutineContext.ensureActive()
 
-        // Match Mihomo fetch path: app excluded + real Clash mixed-port :7890.
-        // hev still dials Mobile SOCKS directly (Telegram path unchanged).
-        // Clash in :route only serves PTRK OkHttp → same stack as working Mihomo updates.
-        if (!startOlcRtcFetchProxy(socksListenPort)) {
-            addLog("olcRTC fetch proxy failed — subscription refresh may stall")
+        // TUN mode: Clash mixed-port only. The DIY bridge opens a second Mobile SOCKS
+        // session and kills the WebRTC pipe after sub/update (user must reconnect).
+        val fetchOk = startOlcRtcFetchProxy(socksListenPort, allowBridgeFallback = false)
+        if (!fetchOk) {
+            addLog("olcRTC Clash fetch :7890 failed — sub/update unavailable until reconnect")
         }
 
         val pfd = establishSystemVpnTunnel(excludeSelfFromVpn = true)
@@ -880,30 +880,37 @@ class OlcboxVpnService : VpnService() {
         resetRecoveryState()
         updateNotification(connectedNotificationText())
         addLog(
-            "VPN tunnel established (olcRTC; app excluded; fetch via Clash :${OlcRtcRoutingConfig.MIXED_PORT})",
+            if (fetchOk && olcRtcRoutingActive) {
+                "VPN tunnel established (olcRTC; app excluded; fetch via Clash :${OlcRtcRoutingConfig.MIXED_PORT})"
+            } else {
+                "VPN tunnel established (olcRTC; app excluded; fetch proxy DOWN)"
+            },
         )
         startWatchdog()
     }
 
     /**
-     * Local :7890 for subscription/update — prefer Clash (identical to Mihomo),
-     * fall back to the HTTP CONNECT → Mobile bridge.
+     * Local :7890 for subscription/update — Clash (same as Mihomo).
+     * Bridge fallback only when there is no hev pipe to starve (Proxy mode).
      */
-    private suspend fun startOlcRtcFetchProxy(olcRtcSocksPort: Int): Boolean {
+    private suspend fun startOlcRtcFetchProxy(
+        olcRtcSocksPort: Int,
+        allowBridgeFallback: Boolean,
+    ): Boolean {
         if (startOlcRtcRoutingRouter(olcRtcSocksPort)) return true
+        if (!allowBridgeFallback) return false
         return startOlcRtcFetchBridge()
     }
 
     private suspend fun startOlcRtcRoutingRouter(olcRtcSocksPort: Int): Boolean {
         stopOlcRtcFetchBridge()
         stopOlcRtcRoutingRouter()
-        // Free mixed-port if something still holds it.
         if (isLocalSocksPortOpen(OlcRtcRoutingConfig.MIXED_PORT)) {
             addLog("Port ${OlcRtcRoutingConfig.MIXED_PORT} still open — waiting briefly")
             waitForSocksPortReleased(OlcRtcRoutingConfig.MIXED_PORT, 1_500L)
         }
         val handle = currentNetwork?.networkHandle ?: 0L
-        val result = kotlinx.coroutines.CompletableDeferred<Boolean>()
+        val result = kotlinx.coroutines.CompletableDeferred<Pair<Boolean, String?>>()
         addLog(
             "Starting olcRTC Clash fetch router → SOCKS $olcRtcSocksPort " +
                 "(mixed-port ${OlcRtcRoutingConfig.MIXED_PORT})",
@@ -915,11 +922,11 @@ class OlcboxVpnService : VpnService() {
             networkHandle = handle,
             socksUsername = socksUsername,
             socksPassword = socksPassword,
-            onResult = { ok ->
-                if (!result.isCompleted) result.complete(ok)
+            onResult = { ok, error ->
+                if (!result.isCompleted) result.complete(ok to error)
             },
         )
-        val ok = withTimeoutOrNull(20_000L) { result.await() } ?: false
+        val (ok, error) = withTimeoutOrNull(20_000L) { result.await() } ?: (false to "timeout")
         olcRtcRoutingActive = ok
         if (ok) {
             val ready = waitForLocalSocksPort(OlcRtcRoutingConfig.MIXED_PORT, 5_000L)
@@ -931,7 +938,7 @@ class OlcboxVpnService : VpnService() {
             addLog("olcRTC Clash mixed-port ${OlcRtcRoutingConfig.MIXED_PORT} ready")
             return true
         }
-        addLog("olcRTC Clash router failed — will try fetch bridge")
+        addLog("olcRTC Clash router failed: ${error ?: "unknown"}")
         return false
     }
 
@@ -1394,10 +1401,11 @@ class OlcboxVpnService : VpnService() {
                         return@launch
                     }
 
-                    // Sub/update go through Clash/:7890 (or bridge) — restart if it died.
+                    // Sub/update go through Clash :7890 — restart Clash only (no bridge on TUN).
                     !isLocalSocksPortOpen(OlcRtcRoutingConfig.MIXED_PORT) -> {
-                        addLog("Watchdog: olcRTC fetch :${OlcRtcRoutingConfig.MIXED_PORT} down — restarting")
-                        if (!startOlcRtcFetchProxy(socksListenPort)) {
+                        addLog("Watchdog: olcRTC fetch :${OlcRtcRoutingConfig.MIXED_PORT} down — restarting Clash")
+                        val allowBridge = mode == AndroidConnectionMode.Proxy
+                        if (!startOlcRtcFetchProxy(socksListenPort, allowBridgeFallback = allowBridge)) {
                             addLog("Watchdog: fetch proxy restart failed")
                         }
                     }
