@@ -496,13 +496,13 @@ class HomeScreenViewModel(
         onComplete: (updatedCount: Int) -> Unit = {}
     ) {
         viewModelScope.launch {
-            val updatedCount = try {
-                withTimeoutOrNull(60_000L) {
-                    locationsRepository.refreshSubscriptions(
-                        subscriptionProxy = vpnManager.subscriptionFetchProxy()
-                    )
-                } ?: 0
-            } finally {
+            val updatedCount = withTimeoutOrNull(60_000L) {
+                locationsRepository.refreshSubscriptions(
+                    subscriptionProxy = vpnManager.subscriptionFetchProxy()
+                )
+            } ?: 0
+            // Light cleanup only after a real fetch finished — never restart the tunnel.
+            if (updatedCount > 0) {
                 vpnManager.healTransportAfterFetch()
             }
             loadCurrentConfigNow()
@@ -528,14 +528,15 @@ class HomeScreenViewModel(
                     loadCurrentConfigNow()
                     return@launch
                 }
+                if (updatedCount > 0) {
+                    vpnManager.healTransportAfterFetch()
+                }
                 loadCurrentConfigNow()
                 onComplete(updatedCount)
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
                 onError(error.message ?: "Subscription update failed")
-            } finally {
-                vpnManager.healTransportAfterFetch()
             }
         }
     }
@@ -568,17 +569,14 @@ class HomeScreenViewModel(
     }
 
     private suspend fun refreshDueSubscriptionsIfNeeded() {
-        val updatedCount = try {
-            withContext(Dispatchers.IO) {
-                locationsRepository.refreshDueSubscriptions(
-                    subscriptionProxy = vpnManager.subscriptionFetchProxy()
-                )
-            }
-        } finally {
-            vpnManager.healTransportAfterFetch()
+        val updatedCount = withContext(Dispatchers.IO) {
+            locationsRepository.refreshDueSubscriptions(
+                subscriptionProxy = vpnManager.subscriptionFetchProxy()
+            )
         }
         if (updatedCount > 0) {
             loadCurrentConfigNow()
+            // Do not heal on app-open auto-refresh — that restarted VPN every launch.
         }
     }
 

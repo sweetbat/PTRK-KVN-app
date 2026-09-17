@@ -102,7 +102,7 @@ class AndroidUpdateInstaller(
 
     suspend fun download(asset: AppUpdateAsset, onProgress: (Float) -> Unit): Result<File> {
         return try {
-            healTransport()
+            // Never heal mid-download — that restarted Mobile and caused half-file timeouts.
             val proxy = proxyProvider()
             Result.success(withProxyAuthentication(proxy) {
                 val connectionProxy = if (proxy != null && proxy.usesLocalProxy) {
@@ -114,7 +114,6 @@ class AndroidUpdateInstaller(
                 downloads.download(
                     asset = asset,
                     proxy = connectionProxy,
-                    onRetry = { healTransport() },
                     onProgress = { reportProgress(it, onProgress) },
                 )
             })

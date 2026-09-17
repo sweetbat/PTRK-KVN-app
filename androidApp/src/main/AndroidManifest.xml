@@ -107,12 +107,7 @@
         <service
             android:name="org.olcbox.app.vpn.OlcRtcRoutingService"
             android:exported="false"
-            android:process=":route"
-            android:foregroundServiceType="specialUse">
-            <property
-                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Local Clash mixed-port for olcRTC subscription and app-update fetch while the VPN process runs libgojni" />
-        </service>
+            android:process=":route" />
 
         <!--
             Quick Settings tile — allows the user to toggle the VPN directly

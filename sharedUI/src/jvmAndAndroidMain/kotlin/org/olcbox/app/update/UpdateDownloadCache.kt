@@ -79,8 +79,9 @@ internal class UpdateDownloadCache(private val directory: File) {
                         error.message?.contains("BAD_DECRYPT", ignoreCase = true) == true ||
                         error.message?.contains("BAD_RECORD_MAC", ignoreCase = true) == true
                     if (!retryable || attempt >= MAX_ATTEMPTS) throw error
+                    // Brief pause only — do not restart VPN mid-download.
                     runCatching { onRetry() }
-                    delay(800L * attempt)
+                    delay(1_200L * attempt)
                 }
             }
 
