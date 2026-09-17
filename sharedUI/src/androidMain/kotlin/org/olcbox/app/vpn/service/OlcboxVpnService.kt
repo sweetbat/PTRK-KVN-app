@@ -2469,7 +2469,7 @@ class OlcboxVpnService : VpnService() {
         // Was 2 min — screen-off for ~5 min left Mihomo/Hy2 dead until manual reconnect.
         private const val WAKE_LOCK_TIMEOUT_MS = 10 * 60 * 1000L
         private const val HEAL_DEBOUNCE_MS = 45_000L
-        private const val RESTART_HEAL_DEBOUNCE_MS = 20_000L
+        private const val RESTART_HEAL_DEBOUNCE_MS = 60_000L
         private const val TUN_MTU = 1500
         private const val TUN_IPV4_ADDRESS = "10.0.88.88"
         private const val TUN_IPV6_ADDRESS = "fd00:88::88"

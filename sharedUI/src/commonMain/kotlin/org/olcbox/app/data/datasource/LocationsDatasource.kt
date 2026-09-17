@@ -418,7 +418,8 @@ class LocationsRepositoryImpl(
                 successful++
             }
         }
-        // Refresh paired olcRTC (olcsub) when a drink.ptrkkvn.beer mug URL was refreshed.
+        // Best-effort companion refresh. Never fail the primary mug update if olcsub fails —
+        // that showed "update failed" after traffic had already refreshed.
         val pendingCompanions = companionUrls.filter { companion ->
             groups.keys.none { it.equals(companion, ignoreCase = true) } &&
                 getBundle().locations.any {
@@ -426,9 +427,12 @@ class LocationsRepositoryImpl(
                 }
         }.toSet()
         if (pendingCompanions.isNotEmpty()) {
-            successful += refreshSubscriptionsMatching(pendingCompanions, subscriptionProxy)
+            val companionOk = runCatching {
+                refreshSubscriptionsMatching(pendingCompanions, subscriptionProxy)
+            }.getOrDefault(0)
+            successful += companionOk.coerceAtLeast(0)
         }
-        if (successful == 0 && lastFailure != null && !groups.isEmpty()) {
+        if (successful == 0 && lastFailure != null && groups.isNotEmpty()) {
             throw IllegalStateException(lastFailure)
         }
         return successful

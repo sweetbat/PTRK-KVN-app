@@ -106,11 +106,11 @@ fun HomeScreen(
         updatingSubscriptionUrl = urls.first()
         var index = 0
         var totalUpdated = 0
+        var lastError: String? = null
         val olcrtcSession = viewModel.isOlcrtcFetchSession()
-        fun finishBatch(errorMessage: String? = null) {
+        fun finishBatch() {
             locationViewModel.loadLocations {
                 if (olcrtcSession) {
-                    // Soft Mobile restart — full restartVpnIfRunning was overkill and raced.
                     viewModel.restoreOlcrtcAfterFetch()
                 } else {
                     viewModel.restartVpnIfRunning()
@@ -119,8 +119,10 @@ fun HomeScreen(
                 scope.launch {
                     snackbarHostState.showSnackbar(
                         when {
-                            errorMessage != null -> S.couldNotUpdateSubscription(errorMessage)
+                            totalUpdated > 0 && lastError != null ->
+                                S.subscriptionUpdated
                             totalUpdated > 0 -> S.subscriptionUpdated
+                            lastError != null -> S.couldNotUpdateSubscription(lastError!!)
                             else -> S.subscriptionsUpToDate
                         }
                     )
@@ -142,7 +144,9 @@ fun HomeScreen(
                     next()
                 },
                 onError = { message ->
-                    finishBatch(errorMessage = message)
+                    lastError = message
+                    // Keep going — mug may have updated traffic while olcsub timed out.
+                    next()
                 }
             )
         }

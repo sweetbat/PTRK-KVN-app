@@ -565,9 +565,7 @@ fun AndroidMainScreen(
                         }
                     },
                     onError = { message ->
-                        if (olcrtc) {
-                            viewModel.restoreOlcrtcAfterFetch()
-                        }
+                        // Soft-restore already ran in refreshSubscription finally when olcrtc.
                         Toast.makeText(context, message, Toast.LENGTH_LONG).show()
                         onFinished()
                     },

@@ -532,7 +532,8 @@ class HomeScreenViewModel(
         viewModelScope.launch {
             val olcrtc = vpnManager.isOlcrtcFetchSession()
             try {
-                val updatedCount = withTimeoutOrNull(if (olcrtc) 30_000L else 55_000L) {
+                // olcRTC through WebRTC is slow; companion olcsub may run after mug.
+                val updatedCount = withTimeoutOrNull(if (olcrtc) 55_000L else 55_000L) {
                     locationsRepository.refreshSubscription(
                         subscriptionUrl = subscriptionUrl,
                         subscriptionProxy = vpnManager.subscriptionFetchProxy()
@@ -549,6 +550,7 @@ class HomeScreenViewModel(
                 throw error
             } catch (error: Exception) {
                 onError(error.message ?: "Subscription update failed")
+                loadCurrentConfigNow()
             } finally {
                 // Batch refresh passes false and restores once after all URLs.
                 if (restoreTransportAfter && olcrtc) {
