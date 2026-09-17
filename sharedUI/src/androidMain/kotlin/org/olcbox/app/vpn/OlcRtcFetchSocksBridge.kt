@@ -37,7 +37,8 @@ class OlcRtcFetchSocksBridge(
     private var serverSocket: ServerSocket? = null
     private var acceptThread: Thread? = null
     private val sockets = mutableSetOf<Socket>()
-    private val sessionPermit = java.util.concurrent.Semaphore(1)
+    // Allow overlap (update check + sub refresh); single-slot caused 429 / stalls.
+    private val sessionPermit = java.util.concurrent.Semaphore(3)
 
     val isRunning: Boolean
         get() = !stopped && serverSocket?.isClosed == false && acceptThread?.isAlive == true

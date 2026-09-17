@@ -912,6 +912,7 @@ class OlcboxVpnService : VpnService() {
         )
         // Poll port — do not trust ResultReceiver across :vpn/:route (timed out at 20s).
         val deadline = System.currentTimeMillis() + 55_000L
+        var lastLoggedStatus = ""
         while (System.currentTimeMillis() < deadline) {
             if (isLocalSocksPortOpen(OlcRtcRoutingConfig.MIXED_PORT)) {
                 olcRtcRoutingActive = true
@@ -919,6 +920,12 @@ class OlcboxVpnService : VpnService() {
                 return true
             }
             val st = OlcRtcRoutingService.readStatus(applicationContext)
+            if (st != lastLoggedStatus && st.isNotBlank()) {
+                lastLoggedStatus = st
+                if (st != "queued") {
+                    addLog("olcRTC Clash status=$st")
+                }
+            }
             if (st.startsWith("err:")) {
                 addLog("olcRTC Clash router failed: ${st.removePrefix("err:")}")
                 stopOlcRtcRoutingRouter()

@@ -1,11 +1,18 @@
 package org.olcbox.app.vpn
 
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
+import android.os.Build
 import android.os.IBinder
 import android.util.Log
+import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -28,6 +35,13 @@ class OlcRtcRoutingService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    override fun onCreate() {
+        super.onCreate()
+        // Must run before any slow work — VPN polls this file.
+        writeStatus(applicationContext, "starting")
+        startAsForeground()
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
@@ -37,6 +51,7 @@ class OlcRtcRoutingService : Service() {
                     runCatching {
                         getSystemService(ConnectivityManager::class.java)?.bindProcessToNetwork(null)
                     }
+                    stopForeground(STOP_FOREGROUND_REMOVE)
                     stopSelf()
                 }
                 return START_NOT_STICKY
@@ -105,6 +120,7 @@ class OlcRtcRoutingService : Service() {
                 runCatching {
                     getSystemService(ConnectivityManager::class.java)?.bindProcessToNetwork(null)
                 }
+                stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf(startId)
             }
         }
@@ -118,6 +134,40 @@ class OlcRtcRoutingService : Service() {
             getSystemService(ConnectivityManager::class.java)?.bindProcessToNetwork(null)
         }
         super.onDestroy()
+    }
+
+    private fun startAsForeground() {
+        val nm = getSystemService(NotificationManager::class.java)
+        if (Build.VERSION.SDK_INT >= 26) {
+            nm?.createNotificationChannel(
+                NotificationChannel(
+                    CHANNEL_ID,
+                    "PTRK-KVN fetch",
+                    NotificationManager.IMPORTANCE_MIN,
+                ).apply {
+                    setShowBadge(false)
+                    description = "olcRTC subscription/update proxy"
+                },
+            )
+        }
+        val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("PTRK-KVN")
+            .setContentText("Fetch proxy")
+            .setSmallIcon(android.R.drawable.stat_sys_download_done)
+            .setOngoing(true)
+            .setSilent(true)
+            .setPriority(NotificationCompat.PRIORITY_MIN)
+            .build()
+        if (Build.VERSION.SDK_INT >= 34) {
+            ServiceCompat.startForeground(
+                this,
+                NOTIF_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
+            )
+        } else {
+            startForeground(NOTIF_ID, notification)
+        }
     }
 
     private fun bindToUpstream(networkHandle: Long) {
@@ -154,6 +204,8 @@ class OlcRtcRoutingService : Service() {
 
     companion object {
         private const val TAG = "OlcRtcRouting"
+        private const val CHANNEL_ID = "olcrtc_fetch"
+        private const val NOTIF_ID = 78901
         const val ACTION_START = "org.olcbox.app.vpn.OlcRtcRoutingService.START"
         const val ACTION_STOP = "org.olcbox.app.vpn.OlcRtcRoutingService.STOP"
         const val EXTRA_SOCKS_PORT = "socks_port"
@@ -188,7 +240,12 @@ class OlcRtcRoutingService : Service() {
                 putExtra(EXTRA_SOCKS_USERNAME, socksUsername)
                 putExtra(EXTRA_SOCKS_PASSWORD, socksPassword)
             }
-            context.startService(intent)
+            // FGS so OEM does not defer/kill :route before onStartCommand.
+            if (Build.VERSION.SDK_INT >= 26) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
         }
 
         fun stop(context: Context) {
@@ -196,13 +253,14 @@ class OlcRtcRoutingService : Service() {
             val intent = Intent(context, OlcRtcRoutingService::class.java).apply {
                 action = ACTION_STOP
             }
-            runCatching { context.startService(intent) }
             runCatching {
-                val am = context.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
-                am.runningAppProcesses
-                    ?.filter { it.processName.endsWith(":route") }
-                    ?.forEach { android.os.Process.killProcess(it.pid) }
+                if (Build.VERSION.SDK_INT >= 26) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
             }
+            // Do NOT killProcess here — races with a following start() and leaves status=queued.
         }
     }
 }
