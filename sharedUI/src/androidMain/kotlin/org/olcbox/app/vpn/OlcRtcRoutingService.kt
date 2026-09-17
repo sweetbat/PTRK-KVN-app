@@ -4,12 +4,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.net.ConnectivityManager
-import android.os.Build
-import android.os.Bundle
-import android.os.Handler
 import android.os.IBinder
-import android.os.Looper
-import android.os.ResultReceiver
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -18,14 +13,15 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import org.olcbox.app.data.mihomo.MihomoAndroidContext
 import org.olcbox.app.mihomo.MihomoEngine
+import java.io.File
 import java.net.InetSocketAddress
 import java.net.Socket
 
 /**
- * Clash rule engine for olcRTC in `:route` (no libgojni).
+ * Clash mixed-port for olcRTC **subscription/update fetch** in `:route` (no libgojni).
  *
- * Must [ConnectivityManager.bindProcessToNetwork] to the real upstream so DIRECT
- * (Минцифры) does not re-enter the VPN tun → hev → Clash loop.
+ * Success is signaled by writing [STATUS_FILE] and opening :7890 — the VPN process
+ * polls the port (ResultReceiver across `:vpn`→`:route` was timing out).
  */
 class OlcRtcRoutingService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -36,10 +32,10 @@ class OlcRtcRoutingService : Service() {
         when (intent?.action) {
             ACTION_STOP -> {
                 scope.launch {
+                    writeStatus(applicationContext, "stopped")
                     runCatching { MihomoEngine.stopListener() }
                     runCatching {
-                        val cm = getSystemService(ConnectivityManager::class.java)
-                        cm?.bindProcessToNetwork(null)
+                        getSystemService(ConnectivityManager::class.java)?.bindProcessToNetwork(null)
                     }
                     stopSelf()
                 }
@@ -52,41 +48,28 @@ class OlcRtcRoutingService : Service() {
             }
         }
 
-        val receiver = if (Build.VERSION.SDK_INT >= 33) {
-            intent?.getParcelableExtra(EXTRA_RECEIVER, ResultReceiver::class.java)
-        } else {
-            @Suppress("DEPRECATION")
-            intent?.getParcelableExtra(EXTRA_RECEIVER)
-        }
         val socksPort = intent?.getIntExtra(EXTRA_SOCKS_PORT, 10808) ?: 10808
-        val profilePath = intent?.getStringExtra(EXTRA_PROFILE_PATH)
         val networkHandle = intent?.getLongExtra(EXTRA_NETWORK_HANDLE, 0L) ?: 0L
         val socksUsername = intent?.getStringExtra(EXTRA_SOCKS_USERNAME).orEmpty()
         val socksPassword = intent?.getStringExtra(EXTRA_SOCKS_PASSWORD).orEmpty()
 
+        writeStatus(applicationContext, "starting")
         scope.launch {
-            var errorMessage: String? = null
             val ok = runCatching {
                 val app = applicationContext
                 MihomoAndroidContext.app = app
-                // Fetch-only profile is MATCH→PROXY; bind still helps Clash DNS on whitelist.
                 bindToUpstream(networkHandle)
+                writeStatus(app, "building")
 
-                val yamlFile = if (!profilePath.isNullOrBlank()) {
-                    java.io.File(profilePath).takeIf { it.isFile }
-                } else {
-                    null
-                } ?: OlcRtcRoutingConfig.buildFetchOnly(
+                val yamlFile = OlcRtcRoutingConfig.buildFetchOnly(
                     context = app,
                     olcRtcSocksPort = socksPort,
                     socksUsername = socksUsername,
                     socksPassword = socksPassword,
                 )
-                Log.i(
-                    TAG,
-                    "fetch yaml=${yamlFile.absolutePath} socks=$socksPort netHandle=$networkHandle bytes=${yamlFile.length()}",
-                )
+                writeStatus(app, "init clash yaml=${yamlFile.length()}b")
                 MihomoEngine.ensureInit(app)
+                writeStatus(app, "setupConfig")
                 val setup = MihomoEngine.setupProfile(
                     context = app,
                     yamlPath = yamlFile.absolutePath,
@@ -105,24 +88,19 @@ class OlcRtcRoutingService : Service() {
                 }
                 MihomoEngine.changeProxy("PROXY", OlcRtcRoutingConfig.PROXY_NAME)
                 MihomoEngine.changeProxy("GLOBAL", OlcRtcRoutingConfig.PROXY_NAME)
+                writeStatus(app, "startListener")
                 MihomoEngine.startListener()
-                if (!waitForPort(OlcRtcRoutingConfig.MIXED_PORT, 15_000L)) {
+                if (!waitForPort(OlcRtcRoutingConfig.MIXED_PORT, 20_000L)) {
                     error("mixed-port ${OlcRtcRoutingConfig.MIXED_PORT} not ready")
                 }
+                writeStatus(app, "ok")
                 true
             }.onFailure {
-                errorMessage = it.message ?: it.javaClass.simpleName
+                val msg = it.message ?: it.javaClass.simpleName
+                writeStatus(applicationContext, "err:$msg")
                 Log.e(TAG, "olcRTC fetch router start failed", it)
             }.getOrDefault(false)
 
-            receiver?.send(
-                if (ok) RESULT_OK else RESULT_ERROR,
-                Bundle().apply {
-                    putBoolean(EXTRA_OK, ok)
-                    putInt(EXTRA_MIXED_PORT, OlcRtcRoutingConfig.MIXED_PORT)
-                    putString(EXTRA_ERROR, if (ok) null else (errorMessage ?: "setup failed"))
-                },
-            )
             if (!ok) {
                 runCatching {
                     getSystemService(ConnectivityManager::class.java)?.bindProcessToNetwork(null)
@@ -144,7 +122,7 @@ class OlcRtcRoutingService : Service() {
 
     private fun bindToUpstream(networkHandle: Long) {
         if (networkHandle == 0L) {
-            Log.w(TAG, "no upstream network handle — DIRECT may loop into VPN")
+            Log.w(TAG, "no upstream network handle")
             return
         }
         val cm = getSystemService(ConnectivityManager::class.java) ?: return
@@ -178,46 +156,43 @@ class OlcRtcRoutingService : Service() {
         private const val TAG = "OlcRtcRouting"
         const val ACTION_START = "org.olcbox.app.vpn.OlcRtcRoutingService.START"
         const val ACTION_STOP = "org.olcbox.app.vpn.OlcRtcRoutingService.STOP"
-        const val EXTRA_RECEIVER = "receiver"
         const val EXTRA_SOCKS_PORT = "socks_port"
-        const val EXTRA_PROFILE_PATH = "profile_path"
         const val EXTRA_NETWORK_HANDLE = "network_handle"
         const val EXTRA_SOCKS_USERNAME = "socks_username"
         const val EXTRA_SOCKS_PASSWORD = "socks_password"
-        const val EXTRA_OK = "ok"
-        const val EXTRA_MIXED_PORT = "mixed_port"
-        const val EXTRA_ERROR = "error"
-        const val RESULT_OK = 0
-        const val RESULT_ERROR = 1
+        private const val STATUS_NAME = "olcrtc-fetch-status.txt"
+
+        fun statusFile(context: Context): File =
+            File(context.filesDir, STATUS_NAME)
+
+        fun writeStatus(context: Context, text: String) {
+            runCatching { statusFile(context).writeText(text) }
+            Log.i(TAG, "status=$text")
+        }
+
+        fun readStatus(context: Context): String =
+            runCatching { statusFile(context).readText().trim() }.getOrDefault("")
 
         fun start(
             context: Context,
             olcRtcSocksPort: Int,
-            profilePath: String?,
             networkHandle: Long,
-            onResult: (ok: Boolean, error: String?) -> Unit,
             socksUsername: String = "",
             socksPassword: String = "",
         ) {
-            val receiver = object : ResultReceiver(Handler(Looper.getMainLooper())) {
-                override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
-                    val ok = resultCode == RESULT_OK && resultData?.getBoolean(EXTRA_OK) == true
-                    onResult(ok, resultData?.getString(EXTRA_ERROR))
-                }
-            }
+            writeStatus(context, "queued")
             val intent = Intent(context, OlcRtcRoutingService::class.java).apply {
                 action = ACTION_START
-                putExtra(EXTRA_RECEIVER, receiver)
                 putExtra(EXTRA_SOCKS_PORT, olcRtcSocksPort)
                 putExtra(EXTRA_NETWORK_HANDLE, networkHandle)
                 putExtra(EXTRA_SOCKS_USERNAME, socksUsername)
                 putExtra(EXTRA_SOCKS_PASSWORD, socksPassword)
-                if (!profilePath.isNullOrBlank()) putExtra(EXTRA_PROFILE_PATH, profilePath)
             }
             context.startService(intent)
         }
 
         fun stop(context: Context) {
+            writeStatus(context, "stopping")
             val intent = Intent(context, OlcRtcRoutingService::class.java).apply {
                 action = ACTION_STOP
             }
