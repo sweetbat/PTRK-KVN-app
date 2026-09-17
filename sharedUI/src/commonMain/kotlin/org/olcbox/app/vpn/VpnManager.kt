@@ -33,4 +33,9 @@ interface VpnManager {
     fun connectedSinceEpochMs(): Long? = null
     /** Clear persisted uptime (call on server switch before reconnect). */
     fun resetConnectedSince() = Unit
+    /**
+     * Soft-heal tunnel after subscription/APK traffic (olcRTC shares Mobile SOCKS with
+     * Telegram; heavy fetch can leave the pipe dead until a reconnect).
+     */
+    fun healTransportAfterFetch() = Unit
 }

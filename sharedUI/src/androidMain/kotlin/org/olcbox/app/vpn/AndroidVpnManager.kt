@@ -400,6 +400,20 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
         }, 600)
     }
 
+    override fun healTransportAfterFetch() {
+        if (status.value !is VpnStatus.Connected &&
+            status.value !is VpnStatus.Reconnecting
+        ) {
+            return
+        }
+        val intent = Intent().apply {
+            setClassName(context.packageName, OlcboxVpnActions.SERVICE_CLASS_NAME)
+            action = OlcboxVpnActions.ACTION_HEAL_TRANSPORT
+        }
+        runCatching { context.startService(intent) }
+            .onFailure { android.util.Log.w("AndroidVpnManager", "healTransport failed", it) }
+    }
+
     override suspend fun ping(locationConfig: LocationConfig): Long? {
         if (locationConfig.isMihomo()) {
             killEngineProcess(":olcrtc")

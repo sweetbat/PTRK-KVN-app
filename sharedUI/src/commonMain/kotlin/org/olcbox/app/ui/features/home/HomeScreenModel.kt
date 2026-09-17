@@ -496,11 +496,15 @@ class HomeScreenViewModel(
         onComplete: (updatedCount: Int) -> Unit = {}
     ) {
         viewModelScope.launch {
-            val updatedCount = withTimeoutOrNull(60_000L) {
-                locationsRepository.refreshSubscriptions(
-                    subscriptionProxy = vpnManager.subscriptionFetchProxy()
-                )
-            } ?: 0
+            val updatedCount = try {
+                withTimeoutOrNull(60_000L) {
+                    locationsRepository.refreshSubscriptions(
+                        subscriptionProxy = vpnManager.subscriptionFetchProxy()
+                    )
+                } ?: 0
+            } finally {
+                vpnManager.healTransportAfterFetch()
+            }
             loadCurrentConfigNow()
             onComplete(updatedCount)
         }
@@ -530,6 +534,8 @@ class HomeScreenViewModel(
                 throw error
             } catch (error: Exception) {
                 onError(error.message ?: "Subscription update failed")
+            } finally {
+                vpnManager.healTransportAfterFetch()
             }
         }
     }
@@ -562,10 +568,14 @@ class HomeScreenViewModel(
     }
 
     private suspend fun refreshDueSubscriptionsIfNeeded() {
-        val updatedCount = withContext(Dispatchers.IO) {
-            locationsRepository.refreshDueSubscriptions(
-                subscriptionProxy = vpnManager.subscriptionFetchProxy()
-            )
+        val updatedCount = try {
+            withContext(Dispatchers.IO) {
+                locationsRepository.refreshDueSubscriptions(
+                    subscriptionProxy = vpnManager.subscriptionFetchProxy()
+                )
+            }
+        } finally {
+            vpnManager.healTransportAfterFetch()
         }
         if (updatedCount > 0) {
             loadCurrentConfigNow()

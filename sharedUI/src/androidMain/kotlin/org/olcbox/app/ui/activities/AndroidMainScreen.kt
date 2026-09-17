@@ -97,9 +97,11 @@ fun AndroidMainScreen(
         AndroidUpdateSettingsStore(context)
     }
     val updateInstaller = remember(context, vpnManager) {
-        AndroidUpdateInstaller(context) {
-            vpnManager.subscriptionFetchProxy()
-        }
+        AndroidUpdateInstaller(
+            context = context,
+            proxyProvider = { vpnManager.subscriptionFetchProxy() },
+            healTransport = { vpnManager.healTransportAfterFetch() },
+        )
     }
     var updateSettings by remember { mutableStateOf(AppUpdateSettings()) }
     var updateStatusText by remember { mutableStateOf<String?>(null) }

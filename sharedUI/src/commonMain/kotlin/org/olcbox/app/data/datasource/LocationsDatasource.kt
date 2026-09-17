@@ -820,10 +820,10 @@ class LocationsRepositoryImpl(
                         url = url,
                         hwid = hwid,
                         allowInsecureRequests = allowInsecureRequests,
-                        // Through VPN: allow slow WebRTC — bridge no longer kills long bodies.
+                        // Through VPN: keep fetches short so WebRTC is not starved.
                         connectTimeoutMs = if (subscriptionProxy != null) 8_000 else 6_000,
-                        requestTimeoutMs = if (subscriptionProxy != null) 45_000 else 18_000,
-                        socketTimeoutMs = if (subscriptionProxy != null) 45_000 else 18_000,
+                        requestTimeoutMs = if (subscriptionProxy != null) 22_000 else 18_000,
+                        socketTimeoutMs = if (subscriptionProxy != null) 22_000 else 18_000,
                         subscriptionProxy = subscriptionProxy,
                     )
                 } catch (error: Throwable) {

@@ -56,6 +56,11 @@ class OlcRtcRoutingService : Service() {
                 }
                 return START_NOT_STICKY
             }
+            ACTION_RESET -> {
+                runCatching { MihomoEngine.resetConnections() }
+                Log.i(TAG, "resetConnections")
+                return START_STICKY
+            }
             ACTION_START, null -> Unit
             else -> {
                 stopSelf(startId)
@@ -208,6 +213,7 @@ class OlcRtcRoutingService : Service() {
         private const val NOTIF_ID = 78901
         const val ACTION_START = "org.olcbox.app.vpn.OlcRtcRoutingService.START"
         const val ACTION_STOP = "org.olcbox.app.vpn.OlcRtcRoutingService.STOP"
+        const val ACTION_RESET = "org.olcbox.app.vpn.OlcRtcRoutingService.RESET"
         const val EXTRA_SOCKS_PORT = "socks_port"
         const val EXTRA_NETWORK_HANDLE = "network_handle"
         const val EXTRA_SOCKS_USERNAME = "socks_username"
@@ -261,6 +267,13 @@ class OlcRtcRoutingService : Service() {
                 }
             }
             // Do NOT killProcess here — races with a following start() and leaves status=queued.
+        }
+
+        fun resetConnections(context: Context) {
+            val intent = Intent(context, OlcRtcRoutingService::class.java).apply {
+                action = ACTION_RESET
+            }
+            runCatching { context.startService(intent) }
         }
     }
 }

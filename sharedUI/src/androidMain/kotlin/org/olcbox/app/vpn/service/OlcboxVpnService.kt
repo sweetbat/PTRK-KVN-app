@@ -127,6 +127,7 @@ class OlcboxVpnService : VpnService() {
     private var watchdogTunStats: Tun2SocksStats? = null
     private var watchdogStalledSamples = 0
     private var lastWakeLockRefreshAtMs = 0L
+    private var screenAwakeReceiver: android.content.BroadcastReceiver? = null
     @Volatile
     private var lastRtcConnectedAtMs = 0L
     @Volatile
@@ -299,6 +300,11 @@ class OlcboxVpnService : VpnService() {
                 addLog("Stop VPN requested")
                 cleanup()
                 return START_NOT_STICKY
+            }
+
+            OlcboxVpnActions.ACTION_HEAL_TRANSPORT -> {
+                healTransportAfterFetch()
+                return START_STICKY
             }
 
             OlcboxVpnActions.ACTION_START_VPN -> Unit
@@ -1350,6 +1356,8 @@ class OlcboxVpnService : VpnService() {
         watchdogJob = scope.launch {
             while (isActive && OlcboxVpnState.status.value is VpnStatus.Connected) {
                 delay(WATCHDOG_INTERVAL_MS)
+                // Keep CPU/network alive past Doze — timeout was only 2 min before.
+                refreshWakeLock()
                 // Mihomo sessions have no Mobile/hev — skip olcRTC/tun2socks checks entirely.
                 if (mihomoTunActive) {
                     val upstream = findActiveUpstreamNetwork()
@@ -1481,6 +1489,7 @@ class OlcboxVpnService : VpnService() {
             runCatching { connectivityManager.unregisterNetworkCallback(networkCallback) }
             isCallbackRegistered = false
         }
+        unregisterScreenAwakeReceiver()
         stopAuthenticatedSocksProxy()
         updateUnderlyingNetwork(null)
         unbindProcessFromNetwork()
@@ -1746,6 +1755,53 @@ class OlcboxVpnService : VpnService() {
         }.getOrNull()
     }
 
+    /**
+     * After subscription/APK fetch (or screen-on): revive pipes without making the user
+     * tap reconnect. olcRTC fetch shares Mobile SOCKS with Telegram — heavy CONNECT
+     * often leaves WebRTC half-dead. Mihomo Hy2/TCP stalls after Doze without a poke.
+     */
+    private fun healTransportAfterFetch() {
+        val status = OlcboxVpnState.status.value
+        if (status !is VpnStatus.Connected && status !is VpnStatus.Reconnecting) return
+        refreshWakeLock(force = true)
+        if (mihomoTunActive) {
+            runCatching { MihomoEngine.resetConnections() }
+            val upstream = findActiveUpstreamNetwork()
+            if (upstream != null) {
+                currentNetwork = upstream
+                currentNetworkTransport = upstream.transportOrNull()
+                runCatching { setUnderlyingNetworks(arrayOf(upstream)) }
+                pushUpstreamDnsToMihomo(upstream)
+            }
+            addLog("Healed Mihomo connections")
+            return
+        }
+        // Drop hung Clash→SOCKS dials in :route, then soft-restart Mobile in place.
+        OlcRtcRoutingService.resetConnections(applicationContext)
+        requestTransportRecovery(
+            reason = "heal after fetch",
+            fullRestart = false,
+            setReconnectingImmediately = true,
+        )
+    }
+
+    private fun onScreenAwake() {
+        val status = OlcboxVpnState.status.value
+        if (status !is VpnStatus.Connected) return
+        refreshWakeLock(force = true)
+        if (mihomoTunActive) {
+            runCatching { MihomoEngine.resetConnections() }
+            val upstream = findActiveUpstreamNetwork()
+            if (upstream != null) {
+                currentNetwork = upstream
+                currentNetworkTransport = upstream.transportOrNull()
+                runCatching { setUnderlyingNetworks(arrayOf(upstream)) }
+                pushUpstreamDnsToMihomo(upstream)
+            }
+            addLog("Screen on: reset Mihomo connections")
+        }
+    }
+
     private fun requestTransportRecovery(
         reason: String,
         fullRestart: Boolean,
@@ -1894,6 +1950,40 @@ class OlcboxVpnService : VpnService() {
         } catch (e: Exception) {
             Log.e(TAG, "Network monitor failed", e)
         }
+        registerScreenAwakeReceiver()
+    }
+
+    private fun registerScreenAwakeReceiver() {
+        if (screenAwakeReceiver != null) return
+        val receiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(context: android.content.Context?, intent: android.content.Intent?) {
+                when (intent?.action) {
+                    Intent.ACTION_SCREEN_ON,
+                    Intent.ACTION_USER_PRESENT -> onScreenAwake()
+                }
+            }
+        }
+        val filter = android.content.IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_ON)
+            addAction(Intent.ACTION_USER_PRESENT)
+        }
+        runCatching {
+            if (Build.VERSION.SDK_INT >= 33) {
+                registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                @Suppress("UnspecifiedRegisterReceiverFlag")
+                registerReceiver(receiver, filter)
+            }
+            screenAwakeReceiver = receiver
+        }.onFailure {
+            Log.w(TAG, "Screen awake receiver failed", it)
+        }
+    }
+
+    private fun unregisterScreenAwakeReceiver() {
+        val receiver = screenAwakeReceiver ?: return
+        screenAwakeReceiver = null
+        runCatching { unregisterReceiver(receiver) }
     }
 
     private fun findActiveUpstreamNetwork(): Network? {
@@ -2369,7 +2459,8 @@ class OlcboxVpnService : VpnService() {
         private const val SOCKS_RELEASE_POLL_MS = 100L
         private const val SOCKET_CONNECT_TIMEOUT_MS = 150
         private const val WAKE_LOCK_REFRESH_INTERVAL_MS = 30_000L
-        private const val WAKE_LOCK_TIMEOUT_MS = 2 * 60 * 1000L
+        // Was 2 min — screen-off for ~5 min left Mihomo/Hy2 dead until manual reconnect.
+        private const val WAKE_LOCK_TIMEOUT_MS = 10 * 60 * 1000L
         private const val TUN_MTU = 1500
         private const val TUN_IPV4_ADDRESS = "10.0.88.88"
         private const val TUN_IPV6_ADDRESS = "fd00:88::88"

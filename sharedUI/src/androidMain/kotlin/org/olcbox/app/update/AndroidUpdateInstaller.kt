@@ -18,7 +18,8 @@ import java.net.Proxy
 
 class AndroidUpdateInstaller(
     context: Context,
-    private val proxyProvider: () -> SubscriptionFetchProxy? = { null }
+    private val proxyProvider: () -> SubscriptionFetchProxy? = { null },
+    private val healTransport: () -> Unit = {},
 ) {
     private val appContext = context.applicationContext
     private val downloads = UpdateDownloadCache(File(appContext.cacheDir, "updates"))
@@ -101,6 +102,7 @@ class AndroidUpdateInstaller(
 
     suspend fun download(asset: AppUpdateAsset, onProgress: (Float) -> Unit): Result<File> {
         return try {
+            healTransport()
             val proxy = proxyProvider()
             Result.success(withProxyAuthentication(proxy) {
                 val connectionProxy = if (proxy != null && proxy.usesLocalProxy) {
@@ -109,12 +111,19 @@ class AndroidUpdateInstaller(
                 } else {
                     Proxy.NO_PROXY
                 }
-                downloads.download(asset, connectionProxy) { reportProgress(it, onProgress) }
+                downloads.download(
+                    asset = asset,
+                    proxy = connectionProxy,
+                    onRetry = { healTransport() },
+                    onProgress = { reportProgress(it, onProgress) },
+                )
             })
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
             Result.failure(error)
+        } finally {
+            healTransport()
         }
     }
 

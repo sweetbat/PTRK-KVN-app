@@ -28,6 +28,7 @@ internal class UpdateDownloadCache(private val directory: File) {
     suspend fun download(
         asset: AppUpdateAsset,
         proxy: Proxy = Proxy.NO_PROXY,
+        onRetry: suspend () -> Unit = {},
         onProgress: suspend (Float) -> Unit = {}
     ): File = downloadMutex.withLock {
         withContext(Dispatchers.IO) {
@@ -78,7 +79,8 @@ internal class UpdateDownloadCache(private val directory: File) {
                         error.message?.contains("BAD_DECRYPT", ignoreCase = true) == true ||
                         error.message?.contains("BAD_RECORD_MAC", ignoreCase = true) == true
                     if (!retryable || attempt >= MAX_ATTEMPTS) throw error
-                    delay(500L * attempt)
+                    runCatching { onRetry() }
+                    delay(800L * attempt)
                 }
             }
 
@@ -144,13 +146,20 @@ internal class UpdateDownloadCache(private val directory: File) {
             connection.inputStream.use { input ->
                 RandomAccessFile(partial, "rw").use { raf ->
                     if (append) raf.seek(rangeStart) else raf.setLength(0)
-                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                    // Small buffer + pacing so olcRTC WebRTC is not starved by APK bulk.
+                    val buffer = ByteArray(8 * 1024)
+                    var sincePace = 0L
                     while (true) {
                         coroutineContext.ensureActive()
                         val read = input.read(buffer)
                         if (read < 0) break
                         raf.write(buffer, 0, read)
                         copied += read
+                        sincePace += read
+                        if (sincePace >= PACE_EVERY_BYTES) {
+                            sincePace = 0L
+                            delay(PACE_DELAY_MS)
+                        }
                         if (total != null && total > 0L) {
                             onProgress((copied.toDouble() / total).toFloat().coerceIn(0f, 0.99f))
                         }
@@ -173,6 +182,8 @@ internal class UpdateDownloadCache(private val directory: File) {
     }
 
     private companion object {
-        const val MAX_ATTEMPTS = 6
+        const val MAX_ATTEMPTS = 8
+        const val PACE_EVERY_BYTES = 256L * 1024L
+        const val PACE_DELAY_MS = 40L
     }
 }

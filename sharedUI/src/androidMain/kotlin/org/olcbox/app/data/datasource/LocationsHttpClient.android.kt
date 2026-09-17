@@ -339,6 +339,13 @@ private fun buildSubscriptionOkHttpClient(
                 InetSocketAddress(subscriptionProxy.host, subscriptionProxy.port),
             )
         )
+        // One CONNECT at a time — parallel GETs starve olcRTC WebRTC on Mobile SOCKS.
+        builder.dispatcher(
+            okhttp3.Dispatcher().apply {
+                maxRequests = 1
+                maxRequestsPerHost = 1
+            }
+        )
         android.util.Log.i(
             "SubDownload",
             "OkHttp via $proxyType ${subscriptionProxy.host}:${subscriptionProxy.port}",

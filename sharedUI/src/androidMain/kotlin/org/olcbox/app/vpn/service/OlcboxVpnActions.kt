@@ -4,6 +4,8 @@ object OlcboxVpnActions {
     const val SERVICE_CLASS_NAME = "org.olcbox.app.vpn.service.OlcboxVpnService"
     const val ACTION_START_VPN = "org.olcbox.app.vpn.service.OlcboxVpnService.START"
     const val ACTION_STOP_VPN = "org.olcbox.app.vpn.service.OlcboxVpnService.STOP"
+    /** Soft-heal after subscription/APK fetch or screen-on (no full user reconnect). */
+    const val ACTION_HEAL_TRANSPORT = "org.olcbox.app.vpn.service.OlcboxVpnService.HEAL"
     const val EXTRA_CONNECTION_MODE = "org.olcbox.app.vpn.service.OlcboxVpnService.CONNECTION_MODE"
     const val EXTRA_SOCKS_HOST = "org.olcbox.app.vpn.service.OlcboxVpnService.SOCKS_HOST"
     const val EXTRA_SOCKS_PORT = "org.olcbox.app.vpn.service.OlcboxVpnService.SOCKS_PORT"
